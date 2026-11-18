@@ -881,3 +881,56 @@ flatpak uninstall org.ghidra_sre.Ghidra
 **Siguiente paso sugerido para aprender:** abre un binario pequeño y conocido, pide a REA que
 descompile `main`, y compara el pseudocódigo con el assembly. El hábito de contrastar ambos es lo
 que convierte esto en una herramienta de estudio y no en una caja de respuestas.
+
+## TL;DR
+
+```
+flatpak install -y flathub org.ghidra_sre.Ghidra
+mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
+```
+
+Crear el archivo `~/.var/app/ai.opencode.opencode/config/opencode/opencode.json` con este contenido:
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "rea": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8082/mcp",
+      "oauth": false,
+      "enabled": true
+    }
+  }
+}
+```
+
+---
+
+### 2. Dentro del Toolbox
+
+```bash
+toolbox enter
+
+sudo dnf install -y java-25-openjdk java-25-openjdk-devel uv nodejs npm
+
+uv tool install mcp-proxy
+
+mkdir -p ~/.npm-global
+npm config set prefix "$HOME/.npm-global"
+npm install --global rea-agents
+echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+---
+
+### 3. Ejecución y Arranque
+
+Arrancar el puente (déjalo corriendo en una terminal):
+
+```bash
+toolbox run ~/.local/bin/mcp-proxy --stateless --port 8082 --host 127.0.0.1 \
+  -e GHIDRA_INSTALL_DIR /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
+  -e REA_GHIDRA_STARTUP_TIMEOUT_MS 60000 \
+  -- "$HOME/.npm-global/bin/rea" mcp
+```
