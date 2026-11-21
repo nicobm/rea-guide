@@ -144,6 +144,9 @@ flatpak list --app --columns=application,version | grep -E 'ai\.opencode|ghidra'
 **Dónde:** en el host, fuera del toolbox.
 
 ```bash
+# Si todavía no tienes el remoto Flathub:
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
 flatpak install -y flathub org.ghidra_sre.Ghidra
 ```
 
@@ -354,6 +357,9 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/mcp
 Deja esa terminal abierta. Si el puerto no aparece, revisa el error de `mcp-proxy`: lo más
 probable es que estés intentando ejecutarlo en el host y no dentro del toolbox.
 
+> Si tienes más de un toolbox, agrega `--container <nombre>` a `toolbox run` para usar el mismo
+> contenedor donde instalaste REA y `mcp-proxy`.
+
 ---
 
 ### 8. Paso 4 — Configurar OpenCode
@@ -389,6 +395,8 @@ Notas:
   configurado pero desconectado, usa `"disabled": true`.
 - `"oauth": false` es correcto porque el proxy no usa autenticación.
 - Si OpenCode **no** fuera Flatpak, la ruta sería `~/.config/opencode/opencode.json`.
+- Si el proyecto tiene su propio `opencode.json` con un servidor `rea`, ese archivo tiene
+  prioridad. Revisa que no esté reemplazando la configuración global.
 
 Reinicia OpenCode por completo. Cerrar la ventana no basta: la app mantiene un servicio de fondo.
 
@@ -581,6 +589,7 @@ Copia y pega en orden. Los comentarios indican en qué capa va cada bloque.
 ### 1. Host: instalar Ghidra y abrirlo una vez
 
 ```bash
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 flatpak install -y flathub org.ghidra_sre.Ghidra
 flatpak list --app --columns=application,version | grep -i ghidra
 flatpak run org.ghidra_sre.Ghidra   # espera a que abra y ciérralo
