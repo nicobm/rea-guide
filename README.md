@@ -1,278 +1,187 @@
-# Ghidra + MCP en Fedora Silverblue
+# OpenCode + Ghidra + REA en Fedora Silverblue
 
-> **Qué es esto:** guía paso a paso para darle a un agente (OpenCode) acceso a ingeniería
-> inversa real sobre binarios: desensamblar, descompilar, leer strings, renombrar
-> funciones, seguir referencias, etc.
+> Guía para darle a OpenCode (Flatpak) acceso real a ingeniería inversa: desensamblar,
+> descompilar, leer strings, seguir referencias y renombrar funciones, usando **REA** como
+> servidor MCP y **Ghidra** instalado desde Flatpak.
 >
-> **Estado:** verificada en una Silverblue con `Ghidra 12.1.3` (Flatpak `org.ghidra_sre.Ghidra`),
-> `OpenCode 2.1.3` (Flatpak `ai.opencode.opencode`), `GhidraMCP 7.0.0`, `rea-agents 6.7.0`,
-> `Node 22.23.1`, `Java 25`, `uv 0.13.7`, `mcp-proxy 0.15.0`.
+> La guía tiene dos partes:
+>
+> - **Parte 1:** explicación detallada, paso a paso, con verificación y diagnóstico.
+> - **Parte 2:** los mismos pasos en comandos directos, al final, para copiar y pegar.
 
----
-
-## Inicio rápido (Ruta A, sin permisos de host)
-
-```bash
-# 1) En el toolbox
-toolbox enter
-uv tool install mcp-proxy
-
-# 2) Vuelve al host (`exit`) y arranca el puente; déjalo vivo en una terminal
-toolbox run "$HOME/.local/bin/mcp-proxy" --stateless --port 8082 --host 127.0.0.1 \
-  -e GHIDRA_INSTALL_DIR /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
-  -e REA_GHIDRA_STARTUP_TIMEOUT_MS 60000 \
-  -- "$HOME/.npm-global/bin/rea" mcp
-
-# 3) En ~/.var/app/ai.opencode.opencode/config/opencode/opencode.json
-#    "rea": { "type": "remote", "url": "http://127.0.0.1:8082/mcp", "oauth": false, "enabled": true }
-
-# 4) Reinicia OpenCode
-flatpak kill ai.opencode.opencode && flatpak run ai.opencode.opencode
-# /mcp  →  rea conectado, ~207 herramientas
-```
-
-Probado con `mcp-proxy 0.15.0`, `rea-agents 6.7.0`, `Ghidra 12.1.3` y `OpenCode 2.1.3`.
-El detalle de cada paso, la Ruta B (GhidraMCP + bridge), el diagnóstico y la sección de
-seguridad están más abajo.
+**Entorno de referencia:** Fedora Silverblue con GNOME, Ghidra `12.1.3` (Flatpak
+`org.ghidra_sre.Ghidra`), OpenCode `2.1.3` (Flatpak `ai.opencode.opencode`), `rea-agents 6.7.0`,
+`mcp-proxy 0.15.0`, `uv 0.13.7` y Java 25 en el toolbox.
 
 ---
 
 ## Índice
 
-1. [Qué vas a montar](#1-qué-vas-a-montar)
-2. [Quién es quién](#2-quién-es-quién)
-3. [Las tres capas: host, toolbox y sandbox](#3-las-tres-capas-host-toolbox-y-sandbox)
-4. [Requisitos previos](#4-requisitos-previos)
-5. [Paso 0 — Permisos del Flatpak de OpenCode (solo variante stdio)](#paso-0--permisos-del-flatpak-de-opencode-solo-variante-stdio)
-6. [Paso 1 — Preparar el toolbox](#paso-1--preparar-el-toolbox)
-7. [Paso 2 — Instalar Ghidra (Flatpak)](#paso-2--instalar-ghidra-flatpak)
-8. [Paso 3 — Instalar REA (ruta recomendada)](#paso-3--instalar-rea-ruta-recomendada)
-9. [Paso 4 — Extensión GhidraMCP dentro de Ghidra (opcional)](#paso-4--extensión-ghidramcp-dentro-de-ghidra-opcional)
-10. [Paso 5 — Bridge MCP en Python (opcional)](#paso-5--bridge-mcp-en-python-opcional)
-11. [Paso 6 — Configurar OpenCode](#paso-6--configurar-opencode)
-12. [Paso 7 — Verificación completa](#paso-7--verificación-completa)
-13. [Uso diario](#uso-diario)
-14. [Problemas frecuentes](#problemas-frecuentes)
-15. [Seguridad: qué estás confiando y por qué](#seguridad-qué-estás-confiando-y-por-qué)
-16. [Mantenimiento: actualizar y desinstalar](#mantenimiento-actualizar-y-desinstalar)
-17. [Glosario](#glosario)
+- [Parte 1 — Guía detallada](#parte-1--guía-detallada)
+  - [1. Qué vas a montar](#1-qué-vas-a-montar)
+  - [2. Quién es quién](#2-quién-es-quién)
+  - [3. Las tres capas: host, toolbox y sandbox](#3-las-tres-capas-host-toolbox-y-sandbox)
+  - [4. Requisitos previos](#4-requisitos-previos)
+  - [5. Paso 1 — Instalar Ghidra (Flatpak)](#5-paso-1--instalar-ghidra-flatpak)
+  - [6. Paso 2 — Dependencias en el toolbox](#6-paso-2--dependencias-en-el-toolbox)
+  - [7. Paso 3 — Arrancar mcp-proxy](#7-paso-3--arrancar-mcp-proxy)
+  - [8. Paso 4 — Configurar OpenCode](#8-paso-4--configurar-opencode)
+  - [9. Verificación](#9-verificación)
+  - [10. Uso diario](#10-uso-diario)
+  - [11. Problemas frecuentes](#11-problemas-frecuentes)
+  - [12. Seguridad](#12-seguridad)
+  - [13. Mantenimiento](#13-mantenimiento)
+  - [14. Notas de precisión](#14-notas-de-precisión)
+- [Parte 2 — Comandos directos (TL;DR)](#parte-2--comandos-directos-tldr)
 
 ---
 
-## 1. Qué vas a montar
+## Parte 1 — Guía detallada
 
-Hay **dos rutas independientes** para que el agente hable con Ghidra. No son complementarias:
-son alternativas. Elige una.
+### 1. Qué vas a montar
 
-### Ruta A — REA por HTTP (recomendada)
+OpenCode corre en un sandbox Flatpak y **no** necesita permisos especiales sobre el host. Solo
+abre una conexión HTTP al loopback. Del otro lado, `mcp-proxy` traduce ese HTTP a un servidor MCP
+por stdio (`rea mcp`), y REA lanza Ghidra en modo headless para analizar el binario.
 
-```
-OpenCode (Flatpak)
-   │  HTTP  →  http://127.0.0.1:8082/mcp
+```text
+OpenCode (Flatpak, sandbox)
+   │  HTTP POST → http://127.0.0.1:8082/mcp
    ▼
-mcp-proxy  ──stdio──►  rea mcp        (los dos dentro del toolbox)
-   │
+mcp-proxy (toolbox; comparte la red del host)
+   │  stdio
    ▼
-Ghidra 12.1.3 headless (Flatpak, vía GHIDRA_INSTALL_DIR)
-   │
+rea mcp (toolbox; Node.js)
+   │  GHIDRA_INSTALL_DIR=/run/host/var/lib/flatpak/.../lib/ghidra
    ▼
-Resultados: pseudocódigo, assembly, strings, xrefs, símbolos…
-```
-
-Ventajas: un solo servidor MCP, ~200 herramientas, no necesitas tener Ghidra abierto, REA también
-sirve para JavaScript, .NET, APK, firmware, etc., y **OpenCode nunca sale de su sandbox**: habla
-HTTP contra `127.0.0.1`, así que no hace falta `org.freedesktop.Flatpak=talk`.
-
-El precio: igual que la Ruta B, hay que dejar un proceso vivo (`mcp-proxy`) en una terminal. Si
-prefieres que OpenCode arranque el servidor solo, existe la variante stdio (§6.2), pero esa sí
-requiere el permiso de host.
-
-### Ruta B — GhidraMCP + bridge (la de bethington)
-
-```
-OpenCode (Flatpak)
-   │  HTTP  →  http://127.0.0.1:8081/mcp
-   ▼
-bridge-mcp-ghidra (Python / uv)
-   │  HTTP  →  http://127.0.0.1:8089
-   ▼
-Ghidra GUI abierto + extensión GhidraMCP (plugin activo)
+Ghidra 12.1.3 headless (archivos del Flatpak; Java del toolbox)
 ```
 
-Ventajas: trabaja sobre **lo que tú tienes abierto** en el CodeBrowser, así que puedes ir
-mirando la pantalla mientras el agente opera. Requiere Ghidra abierto y un programa cargado.
+**La idea central:** el proxy y REA viven en el toolbox, donde están Node, Java y uv. OpenCode
+solo habla HTTP contra `127.0.0.1:8082`. Ghidra no necesita estar abierto: REA lo ejecuta en
+modo headless y le pasa la ruta de instalación del Flatpak.
 
-> **Regla importante:** en `opencode.json` deja **activado un solo servidor**. Si activas los
-> dos, el modelo ve dos catálogos casi idénticos y se confunde (herramientas duplicadas).
+> **Corrección importante:** `mcp-proxy` **no** debe ejecutarse en el host. Los contenedores de
+> toolbox comparten la pila de red del host, así que un proceso que escucha en
+> `127.0.0.1:8082` dentro del toolbox es alcanzable desde el host y desde el Flatpak de
+> OpenCode. Además, el entorno virtual que crea `uv tool install` pertenece al Python del
+> toolbox; ejecutar ese mismo binario desde Silverblue suele fallar con
+> `ModuleNotFoundError: No module named 'mcp_proxy'` o con un intérprete inexistente. La forma
+> correcta es `toolbox run mcp-proxy ... -- rea mcp`, con **todo** dentro del toolbox.
 
 ---
 
-## 2. Quién es quién
+### 2. Quién es quién
 
 | Pieza | Qué es | Dónde vive | Para qué sirve |
 | --- | --- | --- | --- |
 | **Ghidra** | Suite de ingeniería inversa de la NSA | Flatpak, en el host | Desensamblar, descompilar, analizar |
-| **GhidraMCP** (`.zip`) | Extensión de Ghidra (Java) | Dentro de Ghidra | Levanta un servidor HTTP en `127.0.0.1:8089` |
-| **GhidraMCPPlugin** | El plugin concreto dentro de la extensión | Dentro de Ghidra | Hay que **activarlo** a mano; no basta con instalar el zip |
-| **bridge-mcp-ghidra** (`.whl`) | Puente en Python | toolbox (vía `uv tool`) | Traduce MCP ⇄ HTTP de Ghidra, escucha en `127.0.0.1:8081` |
-| **REA** (`rea-agents`) | CLI + servidor MCP en Node | toolbox (vía `npm -g`) | Habla con Ghidra (y otros motores) y expone MCP |
-| **mcp-proxy** | Puente stdio ⇄ HTTP para MCP | toolbox (vía `uv tool`) | Expone `rea mcp` en `127.0.0.1:8082` sin sacar a OpenCode del sandbox |
-| **uv** | Gestor de paquetes Python (Rust) | toolbox | Instala el bridge y `mcp-proxy` en entornos aislados |
-| **toolbox** | Contenedor Fedora con tu `$HOME` compartido | host | Aquí van Node, Java, uv, REA y el bridge |
-| **OpenCode** | El agente | Flatpak, en el host | Consume los servidores MCP |
+| **Ghidra headless** | Ghidra sin interfaz, lanzado por REA | Archivos del Flatpak, ejecutado desde el toolbox | Análisis automático de un binario |
+| **OpenCode** | El agente | Flatpak, en el host | Consume el servidor MCP |
+| **toolbox** | Contenedor Fedora con tu `$HOME` y la red del host compartidos | Host | Aquí van Node, Java, uv, REA y el proxy |
+| **REA** (`rea-agents`) | CLI + servidor MCP en Node | Toolbox, vía `npm -g` | Habla con Ghidra y expone las herramientas MCP |
+| **mcp-proxy** | Puente stdio ⇄ HTTP para MCP | Toolbox, vía `uv tool` | Expone `rea mcp` en `127.0.0.1:8082` |
+| **uv** | Gestor de paquetes Python | Toolbox | Instala `mcp-proxy` en un entorno aislado |
+| **Java 25** | JDK | Toolbox | Lo usa Ghidra headless al ser lanzado por REA |
 
-**Dato clave:** REA **no necesita** ni la extensión GhidraMCP ni el bridge. Son dos caminos
-distintos para el mismo objetivo.
+REA es el único servidor MCP de esta guía. No hace falta la extensión GhidraMCP ni un bridge
+aparte.
 
 ---
 
-## 3. Las tres capas: host, toolbox y sandbox
+### 3. Las tres capas: host, toolbox y sandbox
 
-Este es el punto donde más gente se atasca. Hay tres "mundos" y los comandos solo existen
-en algunos:
+Este es el punto donde más gente se atasca. Hay tres “mundos” y los comandos solo existen en
+algunos:
 
-| Comando | Host | toolbox | Sandbox de OpenCode |
+| Comando | Host | Toolbox | Sandbox de OpenCode |
 | --- | --- | --- | --- |
-| `flatpak`, `flatpak override` | ✅ | ❌ | ❌ |
-| `toolbox enter/run` | ✅ | ❌ | ❌ |
-| `dnf`, `java`, `node`, `uv`, `rea` | ❌ | ✅ | ❌ |
-| `mcp-proxy` (Ruta A) | ❌ | ✅ | ❌ |
-| `flatpak-spawn --host …` (solo variante stdio) | ❌ | ❌ | ✅ |
+| `flatpak`, `flatpak kill` | ✅ | ❌ | ❌ |
+| `toolbox enter/run`, `ss`, `curl` | ✅ | ❌ | ❌ |
+| `dnf`, `java`, `node`, `npm`, `uv`, `rea`, `mcp-proxy` | ❌ | ✅ | ❌ |
+| Editar `opencode.json` | ✅ | ✅ (es tu `$HOME`) | ✅ (es tu `$HOME`) |
 
 Reglas prácticas:
 
-- Los comandos `sudo dnf …` van **dentro de toolbox**.
-- `flatpak install` y `flatpak override` van **en el host**.
-- Si estás escribiendo en OpenCode y ves `flatpak: orden no encontrada`, no estás en el host:
-  estás dentro del sandbox del Flatpak. En la Ruta A no deberías necesitar salir nunca: todo va por
-  `127.0.0.1`. Si eliges la variante stdio, usa `flatpak-spawn --host <comando>`.
-
-**El truco de `$HOME`:** toolbox comparte tu carpeta personal con el host. Por eso un binario
-instalado en `~/.npm-global/bin` o `~/.local/bin` dentro del contenedor **también existe en el
-host**, y viceversa. Así el host puede arrancar `mcp-proxy` y `rea` sin reinstalar nada.
-
-**La red también se comparte:** los Flatpak y los contenedores de toolbox usan la misma pila de
-red del host, así que `127.0.0.1:8081`, `127.0.0.1:8082` y `127.0.0.1:8089` significan lo mismo en
-las tres capas. **De ahí sale la Ruta A:** el sandbox solo abre un socket a loopback; no ejecuta
-nada del host.
+- `sudo dnf …` va **dentro del toolbox**.
+- `flatpak install`, `flatpak kill` y `toolbox run` van **en el host**.
+- Si dentro de OpenCode ves `flatpak: orden no encontrada` o `toolbox: orden no encontrada`, no
+  estás en el host: estás en el sandbox del Flatpak. Esta guía no necesita ejecutar comandos del
+  host desde OpenCode.
+- **`$HOME` se comparte:** un binario instalado en `~/.npm-global/bin` o `~/.local/bin` dentro
+  del toolbox también existe en el host, y viceversa.
+- **La red se comparte:** toolbox usa la red del host. `127.0.0.1:8082` significa lo mismo en
+  el host, en el toolbox y en el sandbox de OpenCode (que tiene `--share=network`).
 
 ---
 
-## 4. Requisitos previos
+### 4. Requisitos previos
 
-- Fedora Silverblue (o cualquier inmutable con `rpm-ostree` + Flatpak + toolbox).
-- Al menos un toolbox creado (`toolbox list`; si no hay, `toolbox create`).
+- Fedora Silverblue (o cualquier sistema inmutable con `rpm-ostree`, Flatpak y toolbox).
+- Al menos un toolbox creado. Si no tienes ninguno:
+
+  ```bash
+  toolbox create
+  ```
+
 - OpenCode instalado como Flatpak (`ai.opencode.opencode`).
-- ~3 GB libres: Ghidra + JDK + extensiones pesan.
-- Puerto `8082` libre en el host (lo usa `mcp-proxy`; 8081 y 8089 son de la Ruta B).
-- Un binario de práctica (un `.exe` o un ELF pequeño).
+- Ghidra instalado como Flatpak (`org.ghidra_sre.Ghidra`); lo hacemos en el Paso 1.
+- Puerto `8082` libre en el host.
+- ~3–4 GB libres para Ghidra, el JDK y las dependencias.
 
-Comprueba lo básico:
+Comprobación básica en el host:
 
 ```bash
-# En el host
 flatpak --version
 toolbox list
-
-# Dentro del toolbox
-toolbox enter
-cat /etc/fedora-release
+flatpak list --app --columns=application,version | grep -E 'ai\.opencode|ghidra'
 ```
-
-> En Silverblue el toolbox suele ser la misma versión que el host. Si tu toolbox es más antiguo,
-> `toolbox create --distro fedora --release 43` (o la que uses) te da uno nuevo.
 
 ---
 
-## Paso 0 — Permisos del Flatpak de OpenCode (solo variante stdio)
+### 5. Paso 1 — Instalar Ghidra (Flatpak)
 
-**Dónde:** en el host.
-
-> **Si vas por la Ruta A (REA por HTTP), sáltate este paso entero.** OpenCode solo abre un socket a
-> `127.0.0.1:8082` y el Flatpak ya comparte la red del host: no necesita ejecutar nada fuera del
-> sandbox ni permiso alguno. Compruébalo con el proxy arrancado:
-> `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/mcp` → `406` (normal en GET: el endpoint espera POST).
-
-Este permiso solo hace falta en la **variante stdio** (§6.2), donde OpenCode lanza
-`flatpak-spawn --host toolbox run … rea mcp` por sí mismo. Por defecto, un Flatpak está encerrado:
-no puede ejecutar programas del host, así que hay que darle permiso en el bus de sesión:
+**Dónde:** en el host, fuera del toolbox.
 
 ```bash
-flatpak override --user --talk-name=org.freedesktop.Flatpak ai.opencode.opencode
-
-# Verificar
-flatpak override --user --show ai.opencode.opencode
+flatpak install -y flathub org.ghidra_sre.Ghidra
 ```
 
-Debe aparecer:
-
-```ini
-[Session Bus Policy]
-org.freedesktop.Flatpak=talk
-```
-
-**Reinicia OpenCode** después de aplicar el override: los permisos se leen al arrancar la app.
-Cerrar la ventana **no** basta: la app de escritorio mantiene un servicio de fondo (`opencode-cli
-serve --service`), y `flatpak run` solo abre otra ventana en el mismo sandbox. Mata la instancia
-completa:
+Verifica la versión y la ruta de instalación:
 
 ```bash
-flatpak kill ai.opencode.opencode
-flatpak run ai.opencode.opencode
+flatpak list --app --columns=application,version | grep -i ghidra
+# org.ghidra_sre.Ghidra   12.1.3
+
+ls /var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
+# Debe listar: Ghidra  support  ghidraRun  Extensions  ...
 ```
 
-### 0.1 Si `/mcp` sigue mostrando `ServiceUnknown` (solo variante stdio)
-
-Este es el error que aparece cuando el permiso nunca llegó al sandbox en ejecución:
-
-```
-rea: Connection closed: MCP server process exited with code 1:
-Portal call failed: org.freedesktop.DBus.Error.ServiceUnknown
-Hint: --host only works when the Flatpak is allowed to talk to org.freedesktop.Flatpak
-```
-
-`ServiceUnknown` (y no `AccessDenied`) significa que el bus de sesión filtrado no expone
-`org.freedesktop.Flatpak` **en absoluto**, así que `flatpak-spawn --host` no puede llegar al host.
-Diagnostica en este orden:
+Abre Ghidra una vez y ciérralo. Así se crean sus preferencias y su archivo de configuración:
 
 ```bash
-# 1) Dentro de la terminal de OpenCode: la prueba definitiva. Debe imprimir "ok".
-flatpak-spawn --host echo ok
-
-# 2) En el host: ¿la política está guardada para el app ID y el ámbito correctos?
-flatpak list --app --columns=application | grep -i opencode
-flatpak override --user --show ai.opencode.opencode
-cat ~/.local/share/flatpak/overrides/ai.opencode.opencode
-
-# 3) Si falta el bloque [Session Bus Policy], aplícalo otra vez…
-flatpak override --user --talk-name=org.freedesktop.Flatpak ai.opencode.opencode
-
-# 4) …y fuerza un sandbox nuevo (obligatorio; ver arriba).
-flatpak kill ai.opencode.opencode && flatpak run ai.opencode.opencode
+flatpak run org.ghidra_sre.Ghidra
 ```
 
-Solo cuando el paso 1 imprima `ok` debes activar `rea`. Causas habituales, por frecuencia:
+**Rutas que hay que tener claras:**
 
-- el override se aplicó **después** de arrancar OpenCode y la app nunca se mató del todo;
-- el override se aplicó a otro app ID (compruébalo con `flatpak list --app`);
-- el override se aplicó como root sin `--user` (queda en `/var/lib/flatpak/overrides`), o hay una
-  entrada vieja/errónea en un ámbito mientras revisas el otro.
+| Qué | Ruta en el host | Ruta dentro del toolbox |
+| --- | --- | --- |
+| Instalación de Ghidra | `/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` | `/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` |
+| Configuración de la GUI | `~/.var/app/org.ghidra_sre.Ghidra/config/ghidra.properties` | No es la misma ruta; ver Paso 2.6 |
 
-Para empezar limpio, resetea y vuelve a aplicar:
+> Si instalaste Ghidra con `flatpak install --user`, los archivos están en
+> `~/.local/share/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` y, desde
+> el toolbox, en `/run/host/var/home/$USER/.local/share/flatpak/...`. Ajusta la ruta en todos
+> los comandos.
 
-```bash
-flatpak override --user --reset ai.opencode.opencode
-flatpak override --user --talk-name=org.freedesktop.Flatpak ai.opencode.opencode
-flatpak kill ai.opencode.opencode
-```
-
-> ⚠️ Este permiso es potente: permite a OpenCode ejecutar **cualquier** comando en el host, como tu
-> usuario. Por eso la ruta recomendada no lo usa. Lo detallamos en
-> [Seguridad](#seguridad-qué-estás-confiando-y-por-qué).
+> El Flatpak de Ghidra **sí** trae un JDK 21 para su interfaz gráfica, pero ese entorno no se
+> hereda cuando REA lanza Ghidra headless desde el toolbox. Por eso instalamos Java en el
+> toolbox en el paso siguiente.
 
 ---
 
-## Paso 1 — Preparar el toolbox
+### 6. Paso 2 — Dependencias en el toolbox
 
 **Dónde:** en el host, entrando al contenedor.
 
@@ -280,657 +189,487 @@ flatpak kill ai.opencode.opencode
 toolbox enter
 ```
 
-### 1.1 Java
-
-Ghidra 12.x exige Java 21 o superior. El Flatpak de Ghidra **no** trae JDK, así que Java en el
-toolbox es lo que usa REA cuando lanza Ghidra en modo headless.
+#### 6.1 Paquetes base
 
 ```bash
-sudo dnf install -y java-25-openjdk java-25-openjdk-devel
-java -version
+sudo dnf install -y \
+  java-25-openjdk java-25-openjdk-devel \
+  uv nodejs npm procps-ng
 ```
 
-Esperado: `openjdk version "25.x"`.
+- **Java 25:** Ghidra 12.1.3 espera un JDK moderno; el `-devel` incluye el compilador que
+  algunas verificaciones de REA necesitan.
+- **Node y npm:** para REA.
+- **uv:** para `mcp-proxy`.
+- **procps-ng:** REA necesita un `ps` compatible en Linux para comprobar la propiedad de
+  procesos.
 
-> Si algún día ves `JAVA_HOME` mal, exporta `JAVA_HOME=/usr/lib/jvm/java-25-openjdk` (o el que
-> devuelva `alternatives --list | grep java`).
+> Si tu release de Fedora no tiene `java-25-openjdk`, instala `java-21-openjdk` y
+> `java-21-openjdk-devel`. Ghidra 12.1.3 acepta Java 21 o superior (el propio Flatpak se
+> compila con OpenJDK 21).
 
-### 1.2 uv (para el bridge y mcp-proxy)
+Verifica:
 
 ```bash
-sudo dnf install -y uv
+java -version
+node --version
+npm --version
 uv --version
 ```
 
-### 1.3 Node y npm (para REA)
+> **Sobre Node:** `rea-agents 6.7.0` declara `^22.19.0 || ^24.11.0 || >=26.0.0`. El Node de
+> Fedora suele cumplirlo. Si `npm` imprime `EBADENGINE`, actualiza Node con `fnm` o `nvm`; en
+> ese caso necesitarás que `mcp-proxy` herede el `PATH` correcto (el comando del Paso 3 ya usa
+> `--pass-environment`).
+
+#### 6.2 Instalar mcp-proxy
 
 ```bash
-sudo dnf install -y nodejs npm
-node --version
-npm --version
-```
-
-**Ojo con la versión:** `rea-agents` declara como requisito `Node 22.x ≥ 22.23.4`, `24.x ≥ 24.22.1`
-o `26.12.1+`. Fedora 43 trae `Node 24.14` / `22.23.1`, es decir, *por debajo* del mínimo.
-
-En la práctica npm solo imprime un aviso `EBADENGINE` y REA funciona igual (así está probado).
-Si prefieres cumplir el requisito al pie de la letra, instala Node con `fnm` o `nvm` en lugar del
-paquete de la distro. Si `npm install` falla directamente con `EBADENGINE`, es esto.
-
-### 1.4 mcp-proxy (para la Ruta A)
-
-**Dónde:** dentro del toolbox.
-
-Es el puente que convierte `rea mcp` (stdio) en un servidor MCP por HTTP, para que OpenCode se
-conecte sin salir del sandbox.
-
-```bash
-toolbox enter
 uv tool install mcp-proxy
 ~/.local/bin/mcp-proxy --version
 ```
 
-Esperado: `mcp-proxy 0.15.0` (o superior). El binario queda en `~/.local/bin/mcp-proxy`, que
-también existe en el host porque `$HOME` se comparte.
+Esperado: `mcp-proxy 0.15.0` o superior.
 
-> `uvx mcp-proxy …` funciona sin instalar nada, pero resuelve y descarga el paquete en cada
-> arranque. Para uso diario, `uv tool install` es más rápido y predecible.
-
-### 1.5 Comprobar que el toolbox ve el Flatpak de Ghidra
+#### 6.3 Instalar REA
 
 ```bash
-ls /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
-```
-
-Debe listar `Ghidra`, `support`, `ghidraRun`, `Extensions`… Si falla, es que Ghidra aún no está
-instalado (Paso 2) o que la ruta cambió de nombre.
-
----
-
-## Paso 2 — Instalar Ghidra (Flatpak)
-
-**Dónde:** en el host (fuera del toolbox).
-
-```bash
-flatpak install -y flathub org.ghidra_sre.Ghidra
-```
-
-Verificar:
-
-```bash
-flatpak list --app --columns=application,version | grep -i ghidra
-# org.ghidra_sre.Ghidra   12.1.3
-
-flatpak run org.ghidra_sre.Ghidra
-```
-
-La primera vez tarda: Ghidra indexa extensiones al arrancar.
-
-**Rutas que hay que memorizar:**
-
-| Qué | Ruta en el host | Ruta dentro del toolbox |
-| --- | --- | --- |
-| Instalación de Ghidra | `/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` | `/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` |
-| Preferencias y extensiones de usuario | `~/.var/app/org.ghidra_sre.Ghidra/config/ghidra/` | igual (es tu `$HOME`) |
-
-Con Flatpak, los directorios XDG del usuario están sandboxeados: por eso las extensiones caen en
-`ghidra_12.1.3_FLATPAK/` y no en `.config/ghidra/`. Si no lo encuentras:
-
-```bash
-find ~ -maxdepth 8 -type d -path '*ghidra*/Extensions' 2>/dev/null
-```
-
----
-
-## Paso 3 — Instalar REA (ruta recomendada)
-
-**Dónde:** dentro del toolbox.
-
-```bash
-toolbox enter
-
 mkdir -p ~/.npm-global
 npm config set prefix "$HOME/.npm-global"
 npm install --global rea-agents
 
-# Verificar (aquí NO hace falta Ghidra para el --version)
 ~/.npm-global/bin/rea --version
 ```
 
-Esperado: `6.7.0` (o la versión actual).
+Esperado: `6.7.0` o superior.
 
-`npm` deja los binarios en `~/.npm-global/bin`. Añádelo al PATH para no escribir la ruta completa:
+Agrega los binarios al `PATH` para usarlos cómodamente dentro del toolbox:
 
 ```bash
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc
+echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 which rea
 ```
 
-> **Por qué un prefix propio:** en un sistema inmutable no quieres escribir en `/usr/bin`. Con
-> `npm config set prefix` todo queda en tu `$HOME`, que se comparte con el host, y así OpenCode
-> puede ejecutarlo desde fuera del contenedor.
+> **Por qué un prefijo propio:** en un sistema inmutable no conviene escribir en `/usr`. Con
+> `npm config set prefix`, todo queda en tu `$HOME`, que se comparte con el host.
 
-Prueba de que REA encuentra Ghidra:
+#### 6.4 Comprobar que el toolbox ve el Flatpak de Ghidra
 
 ```bash
-toolbox run env \
-  GHIDRA_INSTALL_DIR=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
-  rea --version
+export GHIDRA_FLATPAK=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
+ls "$GHIDRA_FLATPAK"
 ```
 
-Si eso funciona, el 90 % de la integración está hecho.
+Debe listar `Ghidra`, `support`, `ghidraRun`, `Extensions`…
+
+#### 6.5 Verificar que REA encuentra Ghidra
+
+```bash
+export GHIDRA_INSTALL_DIR="$GHIDRA_FLATPAK"
+rea doctor --provider ghidra
+```
+
+Debe reportar Ghidra como disponible. `rea --version` solo confirma que el CLI arranca; **no**
+prueba la integración con Ghidra.
+
+#### 6.6 Preparar Ghidra para el modo headless
+
+El Flatpak reemplaza `support/launch.properties` por un enlace simbólico a
+`/var/config/ghidra.properties`. Ese archivo existe dentro del sandbox del Flatpak, pero no
+necesariamente dentro del toolbox. Si el enlace queda roto, `launch.sh` cree que es una compilación
+de desarrollo y falla con:
+
+```text
+ERROR: Cannot launch from repo because Ghidra has not been compiled with Eclipse or Gradle.
+```
+
+La solución es crear el archivo en la ruta que espera el enlace, dentro del toolbox:
+
+```bash
+sudo mkdir -p /var/config
+sudo cp "$GHIDRA_FLATPAK/support/launch.properties.orig" /var/config/ghidra.properties
+```
+
+Verifica:
+
+```bash
+test -f /var/config/ghidra.properties && echo "launch.properties listo"
+```
+
+> `/var/config` pertenece al contenedor del toolbox. Si recreas el toolbox con
+> `toolbox rm` y `toolbox create`, repite este paso.
 
 ---
 
-## Paso 4 — Extensión GhidraMCP dentro de Ghidra (opcional)
+### 7. Paso 3 — Arrancar mcp-proxy
 
-**Solo si vas a usar la Ruta B.** Si usas REA, puedes saltarte este paso y el Paso 5.
+**Dónde:** en el host. El comando se ejecuta con `toolbox run`, así que el proceso corre dentro
+del toolbox.
 
-### 4.1 Descargar el zip
-
-No lo descomprimas: Ghidra acepta el `.zip` tal cual.
-
-```bash
-wget https://github.com/bethington/ghidra-mcp/releases/download/v7.0.0/GhidraMCP-7.0.0.zip
-```
-
-### 4.2 Instalarlo
-
-En la ventana de proyecto de Ghidra (la inicial, no el CodeBrowser):
-
-1. **File → Install Extensions…**
-2. Pulsa **+** y elige `GhidraMCP-7.0.0.zip`
-3. Acepta y **reinicia Ghidra**
-
-### 4.3 Activar el plugin (esto es lo que casi nadie hace)
-
-Instalar la extensión **no** arranca nada. Hay que habilitar el plugin:
-
-1. **File → Configure → Utility → Configure** (o **Configure All Plugins**)
-2. Marca **GhidraMCPPlugin**
-3. Reinicia Ghidra
-
-El servidor HTTP arranca junto con el plugin, en **`127.0.0.1:8089`** (no 8080).
-
-### 4.4 Verificar
-
-Con Ghidra abierto:
+Abre una terminal y déjala viva:
 
 ```bash
-curl -s http://127.0.0.1:8089/check_connection
-```
+export GHIDRA_FLATPAK=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
 
-Esperado:
-
-```json
-{"status":"ok","server_kind":"gui","version":"7.0.0","program":"tu_binario.exe"}
-```
-
-Si `program` no aparece, es que no hay ningún binario abierto en el CodeBrowser.
-
-Otros dos endpoints útiles:
-
-```bash
-curl -s http://127.0.0.1:8089/mcp/health
-curl -s http://127.0.0.1:8089/mcp/schema | jq '.tools | length'
-```
-
-### 4.5 Sobre versiones
-
-La release 7.0.0 se compila contra **Ghidra 12.1.4** y el Flatpak de Flathub está en **12.1.3**.
-En la práctica la extensión carga en 12.1.3, pero es lo primero que hay que mirar si un día
-Ghidra deja de mostrarla tras una actualización: usa la release de GhidraMCP correspondiente a
-tu versión de Ghidra, o instala Ghidra oficial (no Flatpak) de la versión exacta.
-
----
-
-## Paso 5 — Bridge MCP en Python (opcional)
-
-**Solo para la Ruta B.** Si usas REA, sáltalo.
-
-**Dónde:** dentro del toolbox (la instalación). El proceso puede correr en el toolbox o en el
-host, porque `$HOME` es el mismo.
-
-```bash
-toolbox enter
-uv tool install https://github.com/bethington/ghidra-mcp/releases/download/v7.0.0/ghidra_mcp_bridge-7.0.0-py3-none-any.whl
-```
-
-`uv tool install` crea un entorno aislado en `~/.local/share/uv/tools/` y deja el ejecutable en
-`~/.local/bin/bridge-mcp-ghidra`. Verifícalo:
-
-```bash
-ls -l ~/.local/bin/bridge-mcp-ghidra
-```
-
-Arrancarlo (en el toolbox o en el host, da igual):
-
-```bash
-bridge-mcp-ghidra --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081
-```
-
-Deja ese proceso vivo en una terminal aparte. Comprobación:
-
-```bash
-# 8081: puerto MCP (POST). Un GET devuelve 400: eso es normal, significa que el server está.
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/mcp
-# 8089: Ghidra (GET con JSON)
-curl -s http://127.0.0.1:8089/check_connection
-```
-
-Notas útiles del bridge:
-
-- `GHIDRA_MCP_URL` (por defecto `http://127.0.0.1:8089`) apunta a Ghidra.
-- Lazy loading: por defecto solo expone los grupos `listing,function,program`. Si tu cliente no
-  procesa notificaciones `tools/list_changed`, arranca con `--no-lazy` para ver las ~209
-  herramientas desde el principio (más contexto, más capacidades).
-- `GHIDRA_MCP_REQUIRE_PROGRAM_SELECTORS=1` evita que una llamada sin `program=` acabe escribiendo
-  en el binario equivocado cuando tienes varios abiertos.
-
----
-
-## Paso 6 — Configurar OpenCode
-
-**Dónde:** en el host (puedes escribir el archivo desde cualquier sitio; es una ruta del `$HOME`).
-
-```bash
-mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
-touch ~/.var/app/ai.opencode.opencode/config/opencode/opencode.json
-```
-
-Si OpenCode **no** fuera Flatpak, la ruta sería `~/.config/opencode/opencode.json`.
-
-### 6.1 Configuración verificada (Ruta A: REA por HTTP)
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "rea": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8082/mcp",
-      "oauth": false,
-      "enabled": true
-    }
-  }
-}
-```
-
-Eso es todo: ni `flatpak-spawn`, ni rutas absolutas, ni permisos de Flatpak. El puerto `8082` lo
-sirve `mcp-proxy` (Paso 1.4), que hay que tener arrancado:
-
-```bash
-# Desde el host. Si ya estás dentro del toolbox, quita el prefijo `toolbox run`.
-toolbox run ~/.local/bin/mcp-proxy --stateless --port 8082 --host 127.0.0.1 \
-  -e GHIDRA_INSTALL_DIR /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
-  -e REA_GHIDRA_STARTUP_TIMEOUT_MS 60000 \
+toolbox run "$HOME/.local/bin/mcp-proxy" \
+  --stateless --port 8082 --host 127.0.0.1 \
+  --pass-environment \
+  -e GHIDRA_INSTALL_DIR "$GHIDRA_FLATPAK" \
+  -e REA_ANALYSIS_PROVIDER ghidra \
   -- "$HOME/.npm-global/bin/rea" mcp
 ```
 
-Al arrancar imprime las dos rutas que expone (`/sse` y `/mcp`). Detalles que importan:
+Qué hace cada parte:
 
-- `--stateless` evita depender del header `Mcp-Session-Id`; es la opción más compatible con
-  clientes MCP. Quítalo solo si necesitas sesiones de transporte.
-- `--host 127.0.0.1` lo deja en loopback: no lo expongas a la red.
-- Lo que va **después de `--`** es el comando que el proxy lanza por stdio.
-- Cambia la ruta de `rea` si `which rea` no da `~/.npm-global/bin/rea`.
+- **`toolbox run …`** ejecuta `mcp-proxy` dentro del contenedor, donde está su Python, Node y
+  Java. El puerto queda en el loopback del host porque toolbox comparte la red.
+- **`--stateless`** evita depender del header `Mcp-Session-Id`; es la opción más compatible con
+  clientes MCP.
+- **`--host 127.0.0.1`** lo deja solo en loopback: no lo expongas a la red.
+- **`--pass-environment`** hace que REA herede `PATH`, `HOME` y el resto del entorno del
+  toolbox. Es importante si instalaste Node con `fnm` o `nvm`.
+- **`-e GHIDRA_INSTALL_DIR …`** le dice a REA dónde están los archivos de Ghidra. La ruta es la
+  que se ve **desde el toolbox** (`/run/host/...`).
+- **`-e REA_ANALYSIS_PROVIDER ghidra`** fuerza el proveedor correcto si algún día instalas
+  Hopper o IDA.
+- **`-- "$HOME/.npm-global/bin/rea" mcp`** es el servidor stdio que el proxy lanza. Usa la ruta
+  absoluta para no depender del `PATH`. **No** vuelvas a poner `toolbox run` después del `--`:
+  el proxy y REA ya están dentro del mismo contenedor.
 
-### 6.2 Variante stdio (Ruta A sin proxy; requiere el Paso 0)
+Verifica que escucha en el host:
 
-Si prefieres que OpenCode arranque el servidor él mismo, aplica el permiso de host del Paso 0 y usa:
+```bash
+ss -ltnp | grep 8082
+# LISTEN 0  ...  127.0.0.1:8082  ...
+```
+
+Y que responde como servidor MCP (un `GET` sin streaming devuelve `406`, es normal):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/mcp
+# 406
+```
+
+Deja esa terminal abierta. Si el puerto no aparece, revisa el error de `mcp-proxy`: lo más
+probable es que estés intentando ejecutarlo en el host y no dentro del toolbox.
+
+---
+
+### 8. Paso 4 — Configurar OpenCode
+
+**Dónde:** en el host. El archivo está en tu `$HOME`.
+
+```bash
+mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
+```
+
+Crea o edita `~/.var/app/ai.opencode.opencode/config/opencode/opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "rea": {
-      "type": "local",
-      "command": [
-        "flatpak-spawn",
-        "--host",
-        "toolbox",
-        "run",
-        "env",
-        "REA_GHIDRA_STARTUP_TIMEOUT_MS=60000",
-        "GHIDRA_INSTALL_DIR=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra",
-        "/var/home/vm/.npm-global/bin/rea",
-        "mcp"
-      ],
-      "enabled": true
+    "servers": {
+      "rea": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8082/mcp",
+        "oauth": false
+      }
     }
   }
 }
 ```
 
-Cambia **solo** dos cosas si tu usuario no es `vm`:
+Notas:
+
+- OpenCode 2.x usa **`mcp.servers`**. La forma antigua `mcp.rea` todavía se lee en algunas
+  versiones 2.1.x, pero no es la que escribe `opencode mcp add` y puede dejar de funcionar.
+- No hace falta `"enabled": true`: los servidores están habilitados por defecto. Para dejarlo
+  configurado pero desconectado, usa `"disabled": true`.
+- `"oauth": false` es correcto porque el proxy no usa autenticación.
+- Si OpenCode **no** fuera Flatpak, la ruta sería `~/.config/opencode/opencode.json`.
+
+Reinicia OpenCode por completo. Cerrar la ventana no basta: la app mantiene un servicio de fondo.
 
 ```bash
-echo $HOME          # /var/home/vm
-which rea           # dentro del toolbox
+flatpak kill ai.opencode.opencode
+flatpak run ai.opencode.opencode
 ```
 
-### 6.3 Variante con la Ruta B (bridge)
+En una sesión nueva, ejecuta `/mcp` (o `/mcps` en versiones más nuevas). Debe aparecer `rea`
+como conectado y sus herramientas, del orden de 200, con prefijo `rea_`.
 
-Añade este bloque dentro de `"mcp"`, y **pon `enabled: false` en `rea`** para no duplicar
-herramientas:
-
-```json
-"ghidra-mcp": {
-  "type": "remote",
-  "url": "http://127.0.0.1:8081/mcp",
-  "oauth": false,
-  "enabled": true
-}
-```
-
-### 6.4 Por qué esa línea de comando (variante stdio)
-
-Se lee de dentro hacia fuera:
-
-```
-flatpak-spawn --host        → salta del sandbox del Flatpak al host
-toolbox run                 → entra en el contenedor
-env VAR=...                 → define el entorno del proceso
-/…/rea mcp                  → arranca el servidor MCP por stdio
-```
-
-- `GHIDRA_INSTALL_DIR` usa la ruta **vista desde el toolbox** (`/run/host/...`), no la del host.
-- `REA_GHIDRA_STARTUP_TIMEOUT_MS=60000` da un minuto a Ghidra headless para arrancar; con
-  binarios grandes el valor por defecto se queda corto.
-
-> Alternativa más limpia (equivale a lo mismo, sin `env` en el array):
-> ```json
-> "command": ["flatpak-spawn", "--host", "toolbox", "run", "{env:HOME}/.npm-global/bin/rea", "mcp"],
-> "environment": {
->   "GHIDRA_INSTALL_DIR": "/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra",
->   "REA_GHIDRA_STARTUP_TIMEOUT_MS": "60000"
-> }
-> ```
-> Si `{env:HOME}` no se expande en tu versión, vuelve a la ruta absoluta.
-
-### 6.5 Reiniciar
-
-Cierra y abre OpenCode. En una sesión nueva:
-
-```
-/mcp
-```
-
-Debe listar `rea` como conectado y sus herramientas (del orden de 200, con nombres `rea_*`).
+> **No configures `rea` como `"type": "local"` con `command: ["toolbox", "run", …]`.** Ese
+> comando se ejecutaría dentro del sandbox de OpenCode, donde `toolbox` no existe. La conexión
+> remota por HTTP es justamente la que evita ese problema.
 
 ---
 
-## Paso 7 — Verificación completa
+### 9. Verificación
 
-Hazlo en este orden; el primer fallo te dice exactamente qué capa está rota.
+Hazlo en este orden; el primer fallo te dice qué capa está rota.
 
 | # | Comando | Dónde | Resultado esperado |
 | --- | --- | --- | --- |
-| 1 | `ss -ltnp \| grep 8082` | host | `LISTEN 127.0.0.1:8082` |
-| 2 | `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/mcp` | host o sandbox | `406` (GET sin `Accept: text/event-stream`; MCP usa POST) |
-| 3 | `toolbox run java -version` | host | `openjdk 25…` |
-| 4 | `toolbox run ls /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra` | host | `Ghidra support ghidraRun …` |
-| 5 | `toolbox run ~/.npm-global/bin/rea --version` | host | `6.7.0` |
-| 6 | `curl -s http://127.0.0.1:8089/check_connection` | host | `{"status":"ok",…}` *(solo Ruta B)* |
-| 7 | `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/mcp` | host | `400` *(solo Ruta B)* |
-| 8 | Habilidad completa de OpenCode | sandbox | `ok` |
-| 9 | `/mcp` en OpenCode | OpenCode | `rea` conectado |
+| 1 | `flatpak list --app --columns=application,version \| grep -i ghidra` | host | `org.ghidra_sre.Ghidra  12.1.3` |
+| 2 | `toolbox run test -x "$HOME/.npm-global/bin/rea"` | host | sin salida, código 0 |
+| 3 | `toolbox run test -f /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra/support/analyzeHeadless` | host | código 0 |
+| 4 | `toolbox run test -f /var/config/ghidra.properties` | host | código 0 |
+| 5 | `ss -ltnp \| grep 8082` | host | `LISTEN 127.0.0.1:8082` |
+| 6 | `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/mcp` | host | `406` |
+| 7 | `toolbox run env GHIDRA_INSTALL_DIR=… "$HOME/.npm-global/bin/rea" doctor --provider ghidra` | host | Ghidra disponible |
+| 8 | `/mcp` en OpenCode | OpenCode | `rea` conectado |
 
-> Si elegiste la **variante stdio** (§6.2), añade los dos chequeos de host: `flatpak override
-> --user --show ai.opencode.opencode` debe mostrar `org.freedesktop.Flatpak=talk`, y
-> `flatpak-spawn --host echo ok` debe imprimir `ok` dentro de OpenCode.
+Prueba de fuego, dentro de OpenCode y con un binario que tengas derecho a analizar:
 
-Prueba de fuego (dentro de OpenCode, con un binario ya analizado):
-
-```
+```text
 Usa rea para listar las funciones del binario y descompilar la función main.
 ```
 
-Si devuelve pseudocódigo real, está todo funcionando.
+Si devuelve pseudocódigo real, la cadena completa funciona.
 
 ---
 
-## Paso 8 — Abrir el binario a analizar
+### 10. Uso diario
 
-### Con REA (Ruta A)
+1. **Terminal 1 (host):** el `mcp-proxy` del Paso 3, vivo.
+2. **OpenCode abierto:** `/mcp` → `rea` conectado.
+3. Pide cosas concretas y verificables:
 
-No hace falta que abras nada: REA lanza Ghidra headless y analiza el archivo. Solo dile la ruta.
-
-### Con GhidraMCP (Ruta B)
-
-1. Abre Ghidra → **File → New Project** (no versionado).
-2. **File → Import File…** y elige el `.exe` / ELF. Acepta los defaults del importador.
-3. En el proyecto, doble clic (o clic derecho → **Open in CodeBrowser**).
-4. Cuando pregunte, acepta el análisis. Si no, **Analysis → Auto Analyze** y espera.
-5. `curl -s http://127.0.0.1:8089/check_connection` debe mostrar `"program":"tu_binario"`.
-
-> **Auto Analyze no es opcional.** Sin análisis, Ghidra no tiene funciones, ni xrefs, ni
-> decompilación: el agente recibirá errores 500 o listas vacías.
-
----
-
-## Uso diario
-
-1. Terminal 1 (Ruta A): el `mcp-proxy` del §6.1. Si usas Ruta B: `bridge-mcp-ghidra --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081`
-2. Ghidra abierto con el binario analizado (solo Ruta B).
-3. OpenCode abierto `/mcp` → `rea` (o `ghidra-mcp`) conectado.
-4. Pídele cosas concretas y verificables:
-
-```
+```text
 # Buenos prompts
-"Lista las funciones de otomedius.exe y dime cuáles no tienen nombre."
+"Lista las funciones de ejemplo.exe y dime cuáles no tienen nombre."
 "Descompila la función que referencia el string 'license'."
 "Renombra esa función a CheckLicense y documenta sus parámetros."
 "¿Qué imports de kernel32 usa? Marca los sospechosos."
 
 # Malos prompts
-"Analiza el binario."   ← demasiado abierto, gasta contexto y no verifica nada
+"Analiza el binario."   ← demasiado abierto: gasta contexto y no verifica nada
 ```
 
-Consejo: pide **evidencia** (dirección, nombre, pseudocódigo) y ve de una función a la vez.
-Así aprendes y detectas alucinaciones.
+Consejo: pide **evidencia** (dirección, nombre, pseudocódigo) y ve de una función a la vez. Así
+detectas alucinaciones y aprendes.
 
 ---
 
-## Problemas frecuentes
+### 11. Problemas frecuentes
 
 | Síntoma | Causa | Solución |
 | --- | --- | --- |
-| `flatpak: orden no encontrada` | Estás en el sandbox de OpenCode | `flatpak-spawn --host flatpak …` |
-| `/mcp` muestra `rea` pero las llamadas fallan por Ghidra | `GHIDRA_INSTALL_DIR` incorrecto o Ghidra roto | Prueba el paso 5 de la tabla de verificación |
-| `spawn rea ENOENT` | Ruta mal escrita o REA no instalado en ese prefix | `ls ~/.npm-global/bin/rea` |
-| REA falla con errores de Java | Falta JDK en el toolbox | `sudo dnf install java-25-openjdk` |
-| `8089 connection refused` | Ghidra cerrado, plugin desactivado o servidor parado | File → Configure → Utility → Configure → GhidraMCPPlugin; Tools → GhidraMCP → Server Status |
-| Menú **Tools → GhidraMCP** no aparece | Extensión instalada pero plugin sin activar, o versión incompatible | Reinicia Ghidra; revisa compatibilidad 12.1.3 vs 12.1.4 |
-| `curl 8089` responde sin `program` | No hay binario abierto en el CodeBrowser | Abre el programa |
-| Bridge arranca pero OpenCode no lo ve | `enabled: false` en el JSON, o bridge caído | `ss -ltnp \| grep 8081` |
-| `8082 connection refused` | `mcp-proxy` no está arrancado o murió | Arráncalo otra vez (§6.1) y comprueba `ss -ltnp \| grep 8082` |
-| `GET http://127.0.0.1:8082/mcp` = `406` | Es correcto: el endpoint espera POST/streaming | Ignóralo |
-| `address already in use` al arrancar el proxy | Otro proceso ocupa 8082 | `ss -ltnp \| grep 8082`, ciérralo o cambia de puerto (y el JSON) |
-| `rea` conectado pero con 0 herramientas | El proxy lanzó otro comando o `rea` no está en esa ruta | Prueba a mano `toolbox run ~/.npm-global/bin/rea mcp` y revisa lo que va tras `--` |
-| `GET http://127.0.0.1:8081/mcp` = `400` | Es correcto: MCP usa POST | Ignóralo |
-| El agente mezcla respuestas de dos servidores | `rea` y `ghidra-mcp` activos a la vez | Deja solo uno `enabled: true` |
-| `EBADENGINE` al instalar rea-agents | Node de Fedora por debajo del mínimo declarado | Suele funcionar igual; si no, instala Node con `fnm`/`nvm` |
-| Ghidra tarda muchísimo en el primer análisis | Normal (análisis completo de PE grande) | Sube `REA_GHIDRA_STARTUP_TIMEOUT_MS` |
-| `rea: … Portal call failed: …ServiceUnknown` / pista `--host only works when the Flatpak is allowed to talk to org.freedesktop.Flatpak` *(solo variante stdio)* | El permiso `org.freedesktop.Flatpak` no está en efecto en el sandbox en ejecución: override ausente, app ID/ámbito equivocado, o la app nunca se reinició del todo | Aplica el override (Paso 0), luego `flatpak kill ai.opencode.opencode` y vuelve a abrir; verifica dentro de OpenCode con `flatpak-spawn --host echo ok` |
-| `flatpak-spawn --host` funciona pero `toolbox run` falla | El permiso está bien; el problema está en la capa host/toolbox | Ejecuta los pasos 3 y 5 de la tabla de verificación en el host |
-| Todo funciona tras reiniciar, pero no antes | Override de Flatpak aplicado sin reiniciar OpenCode | `flatpak kill ai.opencode.opencode` (una ventana nueva reutiliza el sandbox viejo) |
+| `ModuleNotFoundError: No module named 'mcp_proxy'` o `bad interpreter` | Ejecutaste el `mcp-proxy` del toolbox directamente en el host | Arráncalo con `toolbox run "$HOME/.local/bin/mcp-proxy" …` |
+| `connection refused` en `127.0.0.1:8082` | El proxy no está corriendo o murió | Arráncalo de nuevo (Paso 3) y comprueba `ss -ltnp \| grep 8082` |
+| `env: «rea»: No existe el fichero o el directorio` | `rea` no está en el `PATH` del toolbox | Usa la ruta absoluta `$HOME/.npm-global/bin/rea` |
+| `spawn rea ENOENT` | Ruta mal escrita después del `--` | `ls ~/.npm-global/bin/rea` en host y toolbox |
+| `Cannot launch from repo because Ghidra has not been compiled…` | Enlace roto de `support/launch.properties` | Repite el Paso 2.6 |
+| `ERROR: The 'java' command could not be found…` | Falta JDK en el toolbox o no se pasó el entorno | `sudo dnf install java-25-openjdk java-25-openjdk-devel`; usa `--pass-environment` |
+| `POSIX Ghidra requires its inspected JDK home` | REA no pudo resolver Java | Instala el JDK, verifica `java -version`, o pasa `-e JAVA_HOME /usr/lib/jvm/java-25-openjdk` |
+| `Ghidra did not finish importing and analyzing… within its … ms startup deadline` | Binario grande y timeout corto | Sube `REA_GHIDRA_STARTUP_TIMEOUT_MS` (por ejemplo `600000`); el valor por defecto ya es `330000` |
+| `GET http://127.0.0.1:8082/mcp` = `406` | Correcto: MCP usa POST/streaming | Ignóralo |
+| `address already in use` al arrancar el proxy | Otro proceso ocupa `8082` | `ss -ltnp \| grep 8082`, ciérralo o cambia de puerto (y la URL del JSON) |
+| `EBADENGINE` al instalar `rea-agents` | Node por debajo de `^22.19 \| ^24.11 \| >=26` | Actualiza Node con `fnm`/`nvm`; usa `--pass-environment` en el proxy |
+| `/mcp` no muestra `rea` | Ruta o esquema del JSON incorrectos, o OpenCode no se reinició | Revisa `mcp.servers`, la ruta del Flatpak y ejecuta `flatpak kill ai.opencode.opencode` |
+| `rea` conectado pero con 0 herramientas | El proxy lanzó un comando equivocado | Revisa lo que va después del `--`; debe ser `$HOME/.npm-global/bin/rea mcp` |
+| `flatpak: orden no encontrada` o `toolbox: orden no encontrada` | Estás dentro del sandbox de OpenCode | Usa una terminal del host; no configures comandos locales del host dentro del JSON |
+| Todo funciona tras reiniciar, pero no antes | OpenCode no se reinició del todo | `flatpak kill ai.opencode.opencode` y vuelve a abrir |
 
-Diagnóstico rápido de puertos:
+Diagnóstico rápido de puertos en el host:
 
 ```bash
-ss -ltnp | grep -E '8081|8082|8089'
+ss -ltnp | grep 8082
 ```
 
 ---
 
-## Seguridad: qué estás confiando y por qué
+### 12. Seguridad
 
-La **Ruta A de esta guía (REA por HTTP) no le da a OpenCode ningún permiso extra sobre el host**: el
-sandbox solo abre un socket a `127.0.0.1:8082`, y el Flatpak ya comparte la red. Si quieres
-mantener el aislamiento, no apliques el `override` del Paso 0 y quédate en la Ruta A o en la B.
-
-Aun así, hay cosas que sí estás confiando:
-
-1. **Los servidores MCP escuchan sin autenticación en loopback** (`mcp-proxy` en 8082, el bridge en
-   8081, GhidraMCP en 8089). Cualquier proceso local —tuyo o no— puede hablar con ellos y, a
-   través de REA, abrir archivos y lanzar Ghidra headless. Es loopback, no internet, pero no es una
-   frontera de seguridad. Si alguna vez expones algo fuera de loopback, define
-   `GHIDRA_MCP_AUTH_TOKEN` (GhidraMCP se niega a arrancar en una IP no-loopback sin token) o pon
-   `--auth-bearer-token` en `mcp-proxy`.
-2. **El Flatpak de OpenCode no es un sandbox fuerte**: trae `filesystems=home` (lee y escribe todo
-   tu `$HOME`) y `shared=network`. Aunque no tenga `talk`, cualquier código que corra dentro puede
-   tocar tus archivos y, por ejemplo, dejar algo en `~/.bashrc`. El aislamiento que ganas al evitar
-   `talk` es real, pero parcial.
-3. **Ghidra y REA procesan binarios hostiles.** Un parser con un bug, una extensión de Ghidra
-   maliciosa o un binario preparado son superficie de ataque real. Y ojo con la **inyección de
-   prompts**: los strings, nombres de símbolos y comentarios que REA devuelve al modelo provienen
-   del binario analizado. Un binario puede contener texto que intente convencer al agente de
-   ejecutar algo. Trátalo como datos, nunca como instrucciones; REA ya marca esas respuestas con
-   `untrusted_content`.
-4. **Cadena de suministro**: `rea-agents`, `mcp-proxy`, el wheel del bridge y las extensiones se
-   instalan desde la red y corren con tu usuario.
-
-Además, **no actives** `GHIDRA_MCP_ALLOW_SCRIPTS=1` salvo que lo necesites: habilita ejecución de
-código Java arbitrario dentro de Ghidra.
-
-### Si aun así eliges la variante stdio
-
-**`org.freedesktop.Flatpak=talk` permite a OpenCode ejecutar cualquier comando en el host**, como
-tu usuario. Es una fuga del sandbox por diseño: `flatpak-spawn --host` llama a `HostCommand` del
-`flatpak-session-helper`, que no filtra por comando ni pide confirmación. Deja de ser "una app
-encerrada" y pasa a ser "una app con shell en tu máquina": tus claves SSH, tu sesión de escritorio,
-`systemctl --user`, todo lo que tu usuario puede leer y ejecutar. No da root por sí solo (`sudo`
-pide contraseña), pero no lo necesitas para hacer daño. Y lo hereda cualquier cosa que corra en el
-sandbox: el agente, un plugin, un paquete npm comprometido.
-
-Si trabajas en una **VM** (GNOME Boxes, VirtualBox…), el radio de daño se queda en el invitado: es
-la mitigación más importante. Aun así, mantén apagadas las carpetas compartidas, el portapapeles
-compartido y el drag-and-drop de SPICE, haz snapshots antes de analizar algo sospechoso y no metas
-credenciales reales en esa VM.
-
-Y recuerda lo obvio: analiza solo binarios que tengas derecho a analizar.
+1. **`mcp-proxy` escucha sin autenticación en `127.0.0.1:8082`.** Es solo loopback, no internet,
+   pero cualquier proceso local puede hablar con él y, a través de REA, abrir archivos y lanzar
+   Ghidra headless. No es una frontera de seguridad. No lo expongas en `0.0.0.0`.
+2. **El Flatpak de OpenCode no es un sandbox fuerte.** Su manifiesto incluye
+   `--share=network`, `--filesystem=home`, `/media`, `/mnt` y `/run/media`. Puede leer y escribir
+   todo tu `$HOME`, pero **no** tiene `org.freedesktop.Flatpak=talk`, así que no puede ejecutar
+   comandos del host. Esta guía no necesita ese permiso; si lo agregas, le das a OpenCode (y a
+   cualquier plugin o dependencia comprometida) un shell como tu usuario.
+3. **Ghidra y REA procesan binarios hostiles.** Un parser con un bug o un binario preparado son
+   superficie de ataque real.
+4. **Inyección de prompts.** Los strings, nombres de símbolos y comentarios que REA devuelve al
+   modelo provienen del binario analizado. Un binario puede contener texto que intente convencer
+   al agente de ejecutar algo. Trátalo como datos, nunca como instrucciones. REA marca esas
+   respuestas con `untrusted_content`.
+5. **Cadena de suministro.** `rea-agents`, `mcp-proxy` y sus dependencias se instalan desde la
+   red y corren con tu usuario.
+6. **Si trabajas en una VM**, el radio de daño se queda en el invitado: es la mitigación más
+   importante. Mantén apagadas las carpetas compartidas, el portapapeles compartido y el
+   drag-and-drop de SPICE. Analiza solo binarios que tengas derecho a analizar.
 
 ---
 
-## Mantenimiento: actualizar y desinstalar
+### 13. Mantenimiento
 
-### Actualizar
+#### Actualizar
 
 ```bash
 # Host: Ghidra y OpenCode
 flatpak update org.ghidra_sre.Ghidra ai.opencode.opencode
 
 # Toolbox: REA
-toolbox run ~/.npm-global/bin/rea update
-
-# Toolbox: bridge
-toolbox run uv tool upgrade ghidra-mcp-bridge
+toolbox run "$HOME/.npm-global/bin/rea" update
 
 # Toolbox: mcp-proxy
 toolbox run uv tool upgrade mcp-proxy
 ```
 
-Al actualizar Ghidra, **reinstala la extensión GhidraMCP** de la release correspondiente: las
-extensiones compiladas para otra versión no cargan.
+Después de actualizar Ghidra, vuelve a copiar el archivo de launch properties por si cambió:
 
-### Desinstalar
+```bash
+toolbox enter
+sudo cp \
+  /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra/support/launch.properties.orig \
+  /var/config/ghidra.properties
+exit
+```
+
+Reinicia el proxy y OpenCode después de actualizar.
+
+#### Desinstalar
 
 ```bash
 # REA
 toolbox run npm uninstall --global rea-agents
 rm -rf ~/.npm-global
 
-# Bridge
-toolbox run uv tool uninstall ghidra-mcp-bridge
-
 # mcp-proxy
 toolbox run uv tool uninstall mcp-proxy
 
-# Extension: File → Install Extensions en Ghidra (o borra la carpeta en Extensions/)
-
-# Permiso del Flatpak (solo si usaste la variante stdio)
-flatpak override --user --reset ai.opencode.opencode
-
 # Ghidra
 flatpak uninstall org.ghidra_sre.Ghidra
+
+# Si alguna vez agregaste el permiso de host a OpenCode (esta guía no lo usa)
+flatpak override --user --reset ai.opencode.opencode
 ```
 
 ---
 
-## Glosario
+### 14. Notas de precisión
 
-- **MCP (Model Context Protocol):** protocolo con el que un agente descubre y llama herramientas
-  de un servidor local. "Servidor MCP" = proceso que ofrece herramientas; "cliente" = el agente.
-- **stdio vs HTTP:** el servidor puede hablar por entrada/salida estándar (lo lanza el cliente) o
-  por HTTP (el cliente se conecta a una URL, caso del bridge).
-- **Proxy MCP:** proceso que traduce entre transportes. Aquí `mcp-proxy` convierte el `rea mcp` de
-  stdio en un servidor HTTP, para que el sandbox lo consuma sin permisos de host.
-- **Headless:** Ghidra sin interfaz gráfica, controlado por línea de comandos. Ideal para agentes.
-- **Auto Analyze:** el pase de análisis que descubre funciones, crea referencias y habilita el
-  descompilador.
-- **Pseudocódigo / decompilación:** C aproximado que Ghidra reconstruye a partir del assembly.
-- **Xref:** referencia cruzada; quién llama a quién o quién lee una dirección.
-- **Extensión vs plugin (Ghidra):** la extensión es el paquete (`.zip`, `.jar`); el plugin es el
-  módulo que se habilita dentro de Ghidra. Instalar ≠ activar.
-- **Flatpak / toolbox / sandbox:** ver [sección 3](#3-las-tres-capas-host-toolbox-y-sandbox).
+Estas son las diferencias importantes respecto de la versión que circuló con el workflow
+“mcp-proxy en el host”:
 
----
-
-**Siguiente paso sugerido para aprender:** abre un binario pequeño y conocido, pide a REA que
-descompile `main`, y compara el pseudocódigo con el assembly. El hábito de contrastar ambos es lo
-que convierte esto en una herramienta de estudio y no en una caja de respuestas.
-
-## TL;DR
-
-```
-flatpak install -y flathub org.ghidra_sre.Ghidra
-mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
-```
-
-Crear el archivo `~/.var/app/ai.opencode.opencode/config/opencode/opencode.json` con este contenido:
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "rea": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8082/mcp",
-      "oauth": false,
-      "enabled": true
-    }
-  }
-}
-```
+1. **`mcp-proxy` va dentro del toolbox, no en el host.** Toolbox comparte la red del host, así
+   que el puerto queda igualmente accesible. El binario instalado por `uv tool` puede quedar
+   atado al Python del toolbox; ejecutarlo desde Silverblue no es portable.
+2. **La configuración de OpenCode 2.x usa `mcp.servers`.** `mcp.rea` es la forma antigua.
+   Tampoco se usa `enabled`; para desconectar, `disabled`.
+3. **`REA_GHIDRA_STARTUP_TIMEOUT_MS` por defecto es `330000` ms (5,5 minutos), no un valor
+   corto.** Poner `60000` lo reduce a un minuto y puede romper binarios grandes. Omítelo o sube
+   el valor.
+4. **El requisito de Node de `rea-agents 6.7.0` es `^22.19.0 || ^24.11.0 || >=26.0.0`.**
+   No es `22.23.4`/`24.22.1`; el Node de Fedora suele cumplir.
+5. **El Flatpak de Ghidra sí incluye un JDK 21 para la GUI**, pero ese entorno no se hereda al
+   lanzar Ghidra headless desde el toolbox. Instala Java en el toolbox igualmente.
+6. **El enlace `support/launch.properties` del Flatpak puede quedar roto fuera del sandbox.**
+   Por eso el Paso 2.6 crea `/var/config/ghidra.properties` dentro del toolbox.
+7. **`rea --version` no prueba la integración con Ghidra.** Usa `rea doctor --provider ghidra`.
 
 ---
 
-### 2. Dentro del Toolbox
+## Parte 2 — Comandos directos (TL;DR)
+
+Copia y pega en orden. Los comentarios indican en qué capa va cada bloque.
+
+### 1. Host: instalar Ghidra y abrirlo una vez
 
 ```bash
+flatpak install -y flathub org.ghidra_sre.Ghidra
+flatpak list --app --columns=application,version | grep -i ghidra
+flatpak run org.ghidra_sre.Ghidra   # espera a que abra y ciérralo
+```
+
+### 2. Toolbox: dependencias, REA, mcp-proxy y arreglo de headless
+
+```bash
+toolbox list     # si no aparece ninguno: toolbox create
 toolbox enter
 
-sudo dnf install -y java-25-openjdk java-25-openjdk-devel uv nodejs npm
+sudo dnf install -y \
+  java-25-openjdk java-25-openjdk-devel \
+  uv nodejs npm procps-ng
 
 uv tool install mcp-proxy
 
 mkdir -p ~/.npm-global
 npm config set prefix "$HOME/.npm-global"
 npm install --global rea-agents
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc
+echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
+
+GHIDRA_FLATPAK=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
+sudo mkdir -p /var/config
+sudo cp "$GHIDRA_FLATPAK/support/launch.properties.orig" /var/config/ghidra.properties
+
+export GHIDRA_INSTALL_DIR="$GHIDRA_FLATPAK"
+rea doctor --provider ghidra
+
+exit
 ```
 
----
-
-### 3. Ejecución y Arranque
-
-Arrancar el puente (déjalo corriendo en una terminal):
+### 3. Host: arrancar el proxy (déjalo vivo en una terminal)
 
 ```bash
-toolbox run ~/.local/bin/mcp-proxy --stateless --port 8082 --host 127.0.0.1 \
-  -e GHIDRA_INSTALL_DIR /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
-  -e REA_GHIDRA_STARTUP_TIMEOUT_MS 60000 \
+GHIDRA_FLATPAK=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
+
+toolbox run "$HOME/.local/bin/mcp-proxy" \
+  --stateless --port 8082 --host 127.0.0.1 \
+  --pass-environment \
+  -e GHIDRA_INSTALL_DIR "$GHIDRA_FLATPAK" \
+  -e REA_ANALYSIS_PROVIDER ghidra \
   -- "$HOME/.npm-global/bin/rea" mcp
+```
+
+Comprueba en otra terminal del host:
+
+```bash
+ss -ltnp | grep 8082
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/mcp   # 406
+```
+
+### 4. Host: configurar OpenCode
+
+```bash
+mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
+
+cat > ~/.var/app/ai.opencode.opencode/config/opencode/opencode.json <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "rea": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8082/mcp",
+        "oauth": false
+      }
+    }
+  }
+}
+EOF
+```
+
+> Si ya tienes otros servidores MCP, agrega `rea` dentro de `servers` en vez de reemplazar el
+> archivo completo.
+
+### 5. Host: reiniciar OpenCode
+
+```bash
+flatpak kill ai.opencode.opencode
+flatpak run ai.opencode.opencode
+# /mcp  →  rea conectado
+```
+
+### 6. Prueba de fuego
+
+Dentro de OpenCode:
+
+```text
+Usa rea para listar las funciones del binario y descompilar la función main.
 ```
