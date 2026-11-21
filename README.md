@@ -545,6 +545,7 @@ Reinicia el proxy y OpenCode después de actualizar.
 ```bash
 # REA
 toolbox run npm uninstall --global rea-agents
+toolbox run npm config delete prefix
 rm -rf ~/.npm-global
 
 # mcp-proxy
