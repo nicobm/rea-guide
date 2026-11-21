@@ -437,6 +437,11 @@ Usa rea para listar las funciones del binario y descompilar la función main.
 
 Si devuelve pseudocódigo real, la cadena completa funciona.
 
+> **Prueba de humo sin binario propio:** pedile a OpenCode que abra `/usr/bin/ls` con REA y
+> muestre el `binary_overview`. Es un ELF x86_64 del toolbox; si devuelve segmentos y funciones,
+> Ghidra headless está funcionando. También sirve para comprobar que el arreglo de
+> `launch.properties` del Paso 2.6 está bien aplicado.
+
 ---
 
 ### 10. Uso diario
@@ -473,6 +478,7 @@ detectas alucinaciones y aprendes.
 | `ERROR: The 'java' command could not be found…` | Falta JDK en el toolbox o no se pasó el entorno | `sudo dnf install java-25-openjdk java-25-openjdk-devel`; usa `--pass-environment` |
 | `POSIX Ghidra requires its inspected JDK home` | REA no pudo resolver Java | Instala el JDK, verifica `java -version`, o pasa `-e JAVA_HOME /usr/lib/jvm/java-25-openjdk` |
 | `Ghidra did not finish importing and analyzing… within its … ms startup deadline` | Binario grande y timeout corto | Sube `REA_GHIDRA_STARTUP_TIMEOUT_MS` (por ejemplo `600000`); el valor por defecto ya es `330000` |
+| `rea doctor` dice `environment_healthy: false` pero Ghidra está `ok` | Faltan Hopper, IDA, JADX o Kuna, o el skill de REA; son checks opcionales | Ignóralo para el flujo con Ghidra; revisá que `providerInspections` muestre `ghidra: available: true` |
 | `GET http://127.0.0.1:8082/mcp` = `406` | Correcto: MCP usa POST/streaming | Ignóralo |
 | `address already in use` al arrancar el proxy | Otro proceso ocupa `8082` | `ss -ltnp \| grep 8082`, ciérralo o cambia de puerto (y la URL del JSON) |
 | `EBADENGINE` al instalar `rea-agents` | Node por debajo de `^22.19 \| ^24.11 \| >=26` | Actualiza Node con `fnm`/`nvm`; usa `--pass-environment` en el proxy |
@@ -682,4 +688,10 @@ Dentro de OpenCode:
 
 ```text
 Usa rea para listar las funciones del binario y descompilar la función main.
+```
+
+Si no tienes un binario a mano:
+
+```text
+Usa rea para abrir /usr/bin/ls con Ghidra y mostrarme el binary_overview.
 ```
