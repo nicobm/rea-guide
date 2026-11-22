@@ -1,17 +1,19 @@
-# OpenCode + Ghidra + REA en Fedora Silverblue
+# OpenCode + Ghidra + REA + romdev en Fedora Silverblue
 
 > Guía para darle a OpenCode (Flatpak) acceso real a ingeniería inversa: desensamblar,
 > descompilar, leer strings, seguir referencias y renombrar funciones, usando **REA** como
-> servidor MCP y **Ghidra** instalado desde Flatpak.
+> servidor MCP y **Ghidra** instalado desde Flatpak. La Parte 2 añade **romdevtools**, un
+> servidor MCP para compilar, ejecutar, analizar y recompilar ROMs de consolas retro.
 >
-> La guía tiene dos partes:
+> La guía tiene tres partes:
 >
-> - **Parte 1:** explicación detallada, paso a paso, con verificación y diagnóstico.
-> - **Parte 2:** los mismos pasos en comandos directos, al final, para copiar y pegar.
+> - **Parte 1:** REA + Ghidra, explicación detallada, paso a paso, con verificación y diagnóstico.
+> - **Parte 2:** romdevtools, instalación y uso junto a REA.
+> - **Parte 3:** todos los comandos directos, al final, para copiar y pegar.
 
 **Entorno de referencia:** Fedora Silverblue con GNOME, Ghidra `12.1.3` (Flatpak
 `org.ghidra_sre.Ghidra`), OpenCode `2.1.3` (Flatpak `ai.opencode.opencode`), `rea-agents 6.7.0`,
-`mcp-proxy 0.15.0`, `uv 0.13.7` y Java 25 en el toolbox.
+`mcp-proxy 0.15.0`, `romdevtools 0.156.3`, `uv 0.13.7`, Java 25 y Node.js 24 en el toolbox.
 
 ---
 
@@ -32,7 +34,20 @@
   - [12. Seguridad](#12-seguridad)
   - [13. Mantenimiento](#13-mantenimiento)
   - [14. Notas de precisión](#14-notas-de-precisión)
-- [Parte 2 — Comandos directos (TL;DR)](#parte-2--comandos-directos-tldr)
+- [Parte 2 — romdevtools: ROMs y recompilación](#parte-2--romdevtools-roms-y-recompilación)
+  - [1. Qué añade romdevtools](#1-qué-añade-romdevtools)
+  - [2. Qué no hace](#2-qué-no-hace)
+  - [3. Cómo repartir el trabajo entre REA y romdev](#3-cómo-repartir-el-trabajo-entre-rea-y-romdev)
+  - [4. Requisitos: Node.js 24](#4-requisitos-nodejs-24)
+  - [5. Instalar romdevtools en el toolbox](#5-instalar-romdevtools-en-el-toolbox)
+  - [6. Arrancar el servidor](#6-arrancar-el-servidor)
+  - [7. Configurar OpenCode](#7-configurar-opencode)
+  - [8. Verificación](#8-verificación)
+  - [9. Recetas de uso](#9-recetas-de-uso)
+  - [10. Problemas frecuentes](#10-problemas-frecuentes)
+  - [11. Seguridad, licencias y mantenimiento](#11-seguridad-licencias-y-mantenimiento)
+  - [12. Correcciones a la información de la charla previa](#12-correcciones-a-la-información-de-la-charla-previa)
+- [Parte 3 — Comandos directos (TL;DR)](#parte-3--comandos-directos-tldr)
 
 ---
 
@@ -80,12 +95,15 @@ modo headless y le pasa la ruta de instalación del Flatpak.
 | **OpenCode** | El agente | Flatpak, en el host | Consume el servidor MCP |
 | **toolbox** | Contenedor Fedora con tu `$HOME` y la red del host compartidos | Host | Aquí van Node, Java, uv, REA y el proxy |
 | **REA** (`rea-agents`) | CLI + servidor MCP en Node | Toolbox, vía `npm -g` | Habla con Ghidra y expone las herramientas MCP |
+| **romdevtools** | Servidor MCP + HTTP para consolas retro | Toolbox, vía `npm -g` | Compila, ejecuta, analiza, parchea y recompila ROMs |
+| **Rizin / Ghidra WASM** | Motores de análisis que trae romdev | Dentro de `romdevtools` | Desensamblado, CFG, xrefs y pseudocódigo C de ROMs |
 | **mcp-proxy** | Puente stdio ⇄ HTTP para MCP | Toolbox, vía `uv tool` | Expone `rea mcp` en `127.0.0.1:8082` |
 | **uv** | Gestor de paquetes Python | Toolbox | Instala `mcp-proxy` en un entorno aislado |
 | **Java 25** | JDK | Toolbox | Lo usa Ghidra headless al ser lanzado por REA |
 
-REA es el único servidor MCP de esta guía. No hace falta la extensión GhidraMCP ni un bridge
-aparte.
+En la **Parte 1**, REA es el único servidor MCP. La **Parte 2** agrega `romdevtools`, que es un
+proceso independiente y escucha en otro puerto (`7331`). No hace falta la extensión GhidraMCP ni
+un bridge aparte para ninguno de los dos.
 
 ---
 
@@ -99,6 +117,7 @@ algunos:
 | `flatpak`, `flatpak kill` | ✅ | ❌ | ❌ |
 | `toolbox enter/run`, `ss`, `curl` | ✅ | ❌ | ❌ |
 | `dnf`, `java`, `node`, `npm`, `uv`, `rea`, `mcp-proxy` | ❌ | ✅ | ❌ |
+| `npm-24`, `romdev-server` (Parte 2) | ❌ | ✅ | ❌ |
 | Editar `opencode.json` | ✅ | ✅ (es tu `$HOME`) | ✅ (es tu `$HOME`) |
 
 Reglas prácticas:
@@ -111,7 +130,10 @@ Reglas prácticas:
 - **`$HOME` se comparte:** un binario instalado en `~/.npm-global/bin` o `~/.local/bin` dentro
   del toolbox también existe en el host, y viceversa.
 - **La red se comparte:** toolbox usa la red del host. `127.0.0.1:8082` significa lo mismo en
-  el host, en el toolbox y en el sandbox de OpenCode (que tiene `--share=network`).
+  el host, en el toolbox y en el sandbox de OpenCode (que tiene `--share=network`). Lo mismo vale
+  para `127.0.0.1:7331`, el puerto de romdev en la Parte 2.
+- **Dos servidores, dos puertos:** REA escucha en `8082` (a través de `mcp-proxy`) y romdev en
+  `7331`. Son procesos independientes; podés tener los dos encendidos a la vez.
 
 ---
 
@@ -126,8 +148,9 @@ Reglas prácticas:
 
 - OpenCode instalado como Flatpak (`ai.opencode.opencode`).
 - Ghidra instalado como Flatpak (`org.ghidra_sre.Ghidra`); lo hacemos en el Paso 1.
-- Puerto `8082` libre en el host.
-- ~3–4 GB libres para Ghidra, el JDK y las dependencias.
+- Puerto `8082` libre en el host (y `7331` si vas a usar la Parte 2).
+- ~3–4 GB libres para Ghidra, el JDK y las dependencias. romdevtools suma varios cientos de MB
+  más y carga los binarios de cada plataforma la primera vez que la usas.
 
 Comprobación básica en el host:
 
@@ -589,7 +612,378 @@ Estas son las diferencias importantes respecto de la versión que circuló con e
 
 ---
 
-## Parte 2 — Comandos directos (TL;DR)
+## Parte 2 — romdevtools: ROMs y recompilación
+
+Esta parte es **opcional e independiente** de la Parte 1. No modifica REA ni Ghidra: agrega un
+segundo servidor MCP para trabajar con ROMs de consolas, compilar homebrew, ejecutar el juego en
+un core de emulador, inspeccionar memoria y generar proyectos de descompilación o de
+recompilación estática.
+
+### 1. Qué añade romdevtools
+
+`romdevtools` es un *tool server* (MCP + HTTP) que corre en Node y trae, empaquetados como
+WebAssembly o JavaScript, todo lo necesario para trabajar con 19 consolas y computadoras: desde
+Atari 2600 hasta Dreamcast, más PICO-8, wasmcart y jsgame.
+
+No es un emulador con interfaz: es una API para que el agente haga el trabajo. Expone 38
+herramientas con forma de verbo y un eje de operación, por ejemplo `memory({op:'search'})`,
+`disasm({target:'cfg'})` o `decomp({op:'...'})`.
+
+| Área | Qué puedes hacer |
+| --- | --- |
+| **Compilar** | Toolchains por plataforma (cc65, SDCC, RGBDS, asar, GCC de m68k/ARM/MIPS/SH, SGDK, PVSnesLib, libtonc…) compiladas a WASM. `examples({op:'fork'})` crea un juego de ejemplo y `build({output:'run'})` lo compila, lo carga y lo ejecuta |
+| **Ejecutar** | 15 cores de libretro como WASM: avanzar frames, capturar pantalla, simular input, leer/escribir memoria, guardar estados |
+| **Analizar** | Rizin y el descompilador de Ghidra compilados a WASM: funciones, CFG, xrefs y pseudocódigo C en 18 de las 19 plataformas |
+| **Parchear** | Búsqueda de valores, breakpoints de lectura/escritura/ejecución, cobertura, parcheo de ROM, reinyección de assets comprimidos y una base de datos de trucos como mapa de RAM |
+| **Recompilar** | Recompilación estática de ROMs de NES, SNES, Game Boy, Game Boy Color, GBA, Master System, Game Gear y Genesis a un *wasmcart*, con verificación frame a frame |
+| **Descompilar por coincidencia** | Proyectos splat de N64 y PlayStation: generar C candidato con `m2c`, compilar con el compilador original, comparar instrucción por instrucción, buscar con el *permuter* y verificar el ROM completo |
+| **Assets** | Convertir PNG/Aseprite/Tiled/GIF a tiles, tilemaps y paletas; generar audio para los chips de cada consola |
+
+El paquete npm ya incluye los binarios de todas las plataformas; se cargan e inicializan la
+primera vez que usas cada consola. El servidor también publica documentación navegable en
+`http://127.0.0.1:7331/documentation` y un *skill* para agentes en
+`http://127.0.0.1:7331/skills/romdev/SKILL.md`.
+
+### 2. Qué no hace
+
+Conviene ser explícito para no repetir promesas infladas:
+
+- **No recompila N64, PS2, Xbox, Xbox 360 ni GameCube.** La recompilación estática de romdev
+  cubre consolas de 8 y 16 bits más GBA. Para N64 y PlayStation hay *descompilación por
+  coincidencia* (proyectos tipo splat), que es otro flujo y no produce un port nativo de PC.
+- **No incluye N64: Recompiled, PS2Recomp, XenonRecomp ni xboxrecomp.** Son proyectos aparte,
+  con sus propios repositorios; no forman parte de romdev.
+- **No trae el compilador IDO de SGI.** Es propietario y no se distribuye. Para descompilar N64
+  con IDO hay que compilarlo con `packages/romdevtools/scripts/build-ido.sh` del repositorio, o
+  apuntar `ROMDEV_IDO_DIR` a una copia propia. Sin eso, ese flujo específico no funciona.
+- **No reemplaza a Ghidra sobre binarios nativos.** Para ELF/PE de PC, REA + Ghidra sigue siendo
+  la herramienta de la Parte 1.
+- **No convierte un ROM en un juego de PC jugable con un clic.** Genera código y proyectos; el
+  trabajo de depuración, integración y verificación sigue existiendo.
+
+> La palabra “recompilar” se usa para dos cosas distintas: **recompilación estática** (traducir el
+> código de máquina de la ROM a código que se compila para otra plataforma) y **descompilación
+> por coincidencia** (generar C que, compilado con el compilador original, reproduce el ROM byte
+> por byte). romdev hace ambas, pero solo en las plataformas de la tabla anterior.
+
+### 3. Cómo repartir el trabajo entre REA y romdev
+
+| Tarea | Herramienta |
+| --- | --- |
+| Analizar un `.exe`, `.dll`, `.so` o ELF nativo | REA + Ghidra (Parte 1) |
+| Renombrar funciones, tipos y comentarios en un proyecto Ghidra | REA + Ghidra |
+| Abrir una ROM `.nes`, `.gb`, `.sfc`, `.md`, `.gba`… | romdev |
+| Compilar y ejecutar un juego homebrew | romdev |
+| Capturar pantalla, input, memoria y estados de un juego | romdev |
+| Descompilar código de una ROM a pseudocódigo C | romdev (Rizin/Ghidra WASM) |
+| Recompilar una ROM de 8/16 bits a wasmcart | romdev |
+| Proyecto de descompilación por coincidencia de N64/PSX | romdev (`decomp`) |
+| Depurar un binario nativo con GUI | Ghidra Flatpak |
+
+Son procesos distintos y **pueden convivir**: REA en `127.0.0.1:8082`, romdev en
+`127.0.0.1:7331`. OpenCode ve dos servidores MCP separados y tú eliges cuál usar según el
+artefacto. El Ghidra del Flatpak no se toca: romdev lleva su propio descompilador de Ghidra
+compilado a WASM, no llama al Ghidra instalado.
+
+### 4. Requisitos: Node.js 24
+
+romdevtools exige **Node.js 24 o superior** (`engines: >=24`). No alcanza con el Node 22 que
+Fedora instala por defecto. Verifica dentro del toolbox:
+
+```bash
+toolbox enter
+node --version
+```
+
+Si dice `v22.x` o menos, instala los paquetes versionados de Fedora:
+
+```bash
+sudo dnf install -y nodejs24 nodejs24-npm
+/usr/bin/node-24 --version
+/usr/bin/npm-24 --version
+```
+
+Fedora 43 y posteriores tienen `nodejs24`. Los binarios se llaman `node-24` y `npm-24` **a
+propósito**, para no pisar el `node` del sistema que usan otras herramientas. Por eso más abajo
+creamos un lanzador que invoca `node-24` explícitamente.
+
+> Si tu release de Fedora no tiene `nodejs24`, instala Node 24 con `fnm` o `nvm` y usa la ruta
+> absoluta de ese `node` en el lanzador del Paso 5. No cambies el `node` global del toolbox: REA
+> también lo usa y conviene no romperlo.
+
+### 5. Instalar romdevtools en el toolbox
+
+**Dónde:** dentro del toolbox. Reutiliza el prefijo `~/.npm-global` de la Parte 1, así que no
+escribe en `/usr`.
+
+```bash
+npm-24 config set prefix "$HOME/.npm-global"
+npm-24 install --global romdevtools
+```
+
+Comprueba la versión instalada:
+
+```bash
+/usr/bin/node-24 -p "require('$HOME/.npm-global/lib/node_modules/romdevtools/package.json').version"
+# 0.156.3 (o superior)
+```
+
+El binario que instala npm se llama `romdevtools`, pero su *shebang* es `#!/usr/bin/env node` y
+podría resolverse al Node 22. Para evitar ambigüedades, crea un lanzador que use `node-24`:
+
+```bash
+cat > "$HOME/.local/bin/romdev-server" <<'EOF'
+#!/bin/sh
+exec /usr/bin/node-24 "$HOME/.npm-global/lib/node_modules/romdevtools/src/mcp/server.js" "$@"
+EOF
+chmod +x "$HOME/.local/bin/romdev-server"
+```
+
+Verifica que existe:
+
+```bash
+test -x "$HOME/.local/bin/romdev-server" && echo "lanzador listo"
+```
+
+> El lanzador también sirve para pasar opciones: `romdev-server --port 7332`, o variables como
+> `PORT=7332`, `HOST=127.0.0.1`, `ROMDEV_HOST_WORKERS=0` y `ROMDEV_GPU=<PCI>`.
+
+### 6. Arrancar el servidor
+
+**Dónde:** en el host, con `toolbox run`. Déjalo vivo en su propia terminal, igual que el proxy
+de REA.
+
+```bash
+toolbox run "$HOME/.local/bin/romdev-server"
+```
+
+La primera vez descarga los paquetes que falten y tarda. Cuando termine, debe imprimir algo
+parecido a:
+
+```text
+romdev: server up pid=... v0.156.3
+romdev (v0.156.3) listening on http://localhost:7331/mcp
+```
+
+En otra terminal del host, verifica que escucha y que responde:
+
+```bash
+ss -ltnp | grep 7331
+curl -s http://127.0.0.1:7331/healthz
+# {"ok":true,"version":"0.156.3","sessions":0}
+```
+
+`/healthz` es la comprobación más limpia: no requiere un *handshake* MCP. `GET /mcp` puede
+devolver un `4xx` porque MCP usa `POST`; eso es normal.
+
+> No hace falta `mcp-proxy` para romdev. El servidor ya habla HTTP/streamable MCP nativamente.
+> Tampoco hace falta `--stateless`: romdev soporta tanto el protocolo con sesión como la revisión
+> sin estado.
+
+### 7. Configurar OpenCode
+
+Agrega `romdev` **junto a** `rea` en el mismo archivo
+`~/.var/app/ai.opencode.opencode/config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "rea": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8082/mcp",
+        "oauth": false
+      },
+      "romdev": {
+        "type": "remote",
+        "url": "http://127.0.0.1:7331/mcp",
+        "oauth": false
+      }
+    }
+  }
+}
+```
+
+Si solo quieres romdev, borra el bloque `rea`; si solo quieres REA, no agregues `romdev`.
+
+Notas:
+
+- OpenCode 2.x usa **`mcp.servers`**. El README de romdev muestra la forma antigua `mcp.romdev`;
+  no la uses en esta versión.
+- No hace falta `"enabled": true`; los servidores están habilitados por defecto.
+- `"oauth": false` es correcto: el servidor no pide autenticación.
+- Si el proyecto tiene su propio `opencode.json` con `mcp`, ese archivo tiene prioridad. Revisa
+  que no esté ocultando la configuración global.
+- El Flatpak de OpenCode ya comparte la red del host, así que `127.0.0.1:7331` funciona sin
+  permisos extra. Si en tu instalación la red estuviera aislada, la corrección es
+  `flatpak override --user --share=network ai.opencode.opencode` y reiniciar; **no** existe un
+  `flatpak run --share=network`.
+
+Reinicia OpenCode por completo:
+
+```bash
+flatpak kill ai.opencode.opencode
+flatpak run ai.opencode.opencode
+```
+
+En una sesión nueva, `/mcp` debe mostrar **`rea` y `romdev` conectados**. romdev aporta del orden
+de 38 herramientas.
+
+### 8. Verificación
+
+| # | Comando | Dónde | Resultado esperado |
+| --- | --- | --- | --- |
+| 1 | `toolbox run /usr/bin/node-24 --version` | host | `v24.x` |
+| 2 | `toolbox run test -x "$HOME/.local/bin/romdev-server"` | host | código 0 |
+| 3 | `ss -ltnp \| grep 7331` | host | `LISTEN 127.0.0.1:7331` |
+| 4 | `curl -s http://127.0.0.1:7331/healthz` | host | `{"ok":true,...}` |
+| 5 | `curl -s http://127.0.0.1:7331/openapi.json \| head -c 80` | host | JSON con `openapi` |
+| 6 | `/mcp` en OpenCode | OpenCode | `rea` y `romdev` conectados |
+
+Prueba de fuego sin ROM propio, usando un ejemplo incluido:
+
+```text
+Usa romdev para crear un proyecto de ejemplo de Game Boy llamado demo en ~/roms/demo.
+Después compílalo con build({output:'run'}) y muéstrame el screenshot del primer frame.
+```
+
+Si eso funciona, la cadena compilador WASM + emulador + captura está operativa.
+
+### 9. Recetas de uso
+
+Pide acciones concretas y exige evidencia (dirección, frame, ruta, diferencia). Ejemplos:
+
+```text
+# Explorar una ROM propia
+"Abre ~/roms/game.gb con romdev, lista las funciones que detecta Rizin y descompilá la
+rutina que lee el registro de input. Dame direcciones y pseudocódigo."
+
+# Recompilación estática de Genesis a wasmcart
+"Usa disasm con target recompile y emit wasmcart sobre ~/roms/juego.md. Después corre
+frame con op verifyRecompile y dime en qué frame y en qué registro diverge, si es que diverge."
+
+# Compilar y probar homebrew
+"Forkea el ejemplo genesis/platformer como ~/roms/mi-juego, compílalo con build output run
+y muéstrame el screenshot. Si no compila, lee el error y corrígelo."
+
+# Descompilación por coincidencia (PSX/N64)
+"En este proyecto splat de PlayStation, genera C candidato con m2c para la función 0x80012340,
+compílalo con el compilador del proyecto, compara instrucción por instrucción y ejecuta el
+permuter solo si no coincide. No declares éxito sin el chequeo de ROM completo."
+
+# Documentación antes de tocar nada
+"Lee la guía de plataforma de SNES y el playbook de romhacking de romdev antes de proponer
+un parche para este ROM."
+```
+
+Buenas prácticas:
+
+- Trabaja sobre **copias** de tus ROMs y guarda los proyectos fuera de la carpeta de la ROM
+  original.
+- Una plataforma a la vez: cada una carga sus binarios y tiene sus trampas.
+- Para emuladores 3D (N64, PSX, Dreamcast) el primer arranque es más lento y consume más RAM.
+- Si el agente dice “recompilé el juego”, pídele la verificación (`verifyRecompile`,
+  `findDiverge`, comparación de hash). Sin eso, es una afirmación sin evidencia.
+
+### 10. Problemas frecuentes
+
+| Síntoma | Causa | Solución |
+| --- | --- | --- |
+| `npm-24: orden no encontrada` | No instalaste `nodejs24-npm` | `sudo dnf install nodejs24 nodejs24-npm` |
+| `Unsupported engine` o errores de sintaxis al arrancar | Se está usando Node 22 | Usa el lanzador con `/usr/bin/node-24`; verifica `romdev-server` |
+| `Cannot find module '.../romdevtools/src/mcp/server.js'` | El prefijo de npm no es `~/.npm-global` o la instalación falló | Revisa `npm-24 config get prefix` y reinstala |
+| `EADDRINUSE` en `7331` | Ya hay otro romdev (u otro proceso) en ese puerto | `ss -ltnp \| grep 7331`, ciérralo o arranca con `--port 7332` y cambia la URL del JSON |
+| `healthz` no responde | El servidor murió o no arrancó | Mira la terminal del Paso 6; prueba `toolbox run "$HOME/.local/bin/romdev-server"` a mano |
+| `/mcp` no muestra `romdev` | JSON con la forma antigua `mcp.romdev`, URL mal escrita o OpenCode no se reinició | Usa `mcp.servers`, revisa el puerto y `flatpak kill ai.opencode.opencode` |
+| `romdev` conectado pero con 0 herramientas | El proceso arrancó con un Node incompatible o crasheó | Revisa la salida del servidor y la versión de Node |
+| La primera llamada a una consola tarda mucho | Está cargando e inicializando los binarios WASM de esa plataforma | Espera; las siguientes son rápidas |
+| `decomp` pide IDO | El compilador de SGI no se distribuye | Compílalo con `build-ido.sh` o define `ROMDEV_IDO_DIR` |
+| `playtest` no abre ventana | No hay `DISPLAY`/`WAYLAND_DISPLAY` o faltan librerías gráficas en el toolbox | Úsalo desde una sesión gráfica del host; el resto de herramientas funciona headless |
+| Errores de EGL/GLES en consolas 3D | `native-gles` no encuentra el driver en el contenedor | Instala `mesa-libEGL`/`mesa-libGLES` en el toolbox o usa el render por software |
+| Consumo de RAM alto | Cada sesión puede tener su propio core en un proceso | `ROMDEV_HOST_WORKERS=0` lo desactiva; cierra sesiones viejas |
+
+### 11. Seguridad, licencias y mantenimiento
+
+**Seguridad**
+
+1. **Sin autenticación en `127.0.0.1:7331`.** Es solo loopback, pero cualquier proceso local
+   puede hablar con el servidor, cargar ROMs, compilar y escribir archivos de proyecto. No lo
+   expongas en `0.0.0.0`.
+2. **Ejecuta binarios nativos.** romdev incluye módulos nativos (SDL, GL/EGL) y lanza procesos
+   de host por sesión. Corre con tu usuario y tus permisos.
+3. **Contenido de la ROM no confiable.** Nombres de símbolos, strings y comentarios que el
+   agente lee vienen del ROM. Pueden contener instrucciones maliciosas. Son datos, no órdenes.
+4. **Cadena de suministro.** `romdevtools` arrastra decenas de paquetes `romdev-*` y
+   dependencias de npm; todos se ejecutan con tu usuario. Instala versiones publicadas y revisa
+   `NOTICE`.
+5. **Aislamiento.** Si trabajas en una VM, el daño queda en el invitado. Es la mitigación más
+   útil, igual que en la Parte 1.
+
+**Licencias**
+
+- El código propio de romdev es MIT.
+- Los componentes de terceros que empaqueta conservan sus licencias (GPL, MPL, no comercial,
+  según el caso) y están listados en `NOTICE`.
+- Los juegos que crees con romdev son tuyos, incluidas las librerías de runtime permisivas que
+  enlacen.
+- Un **cartucho recompilado** contiene código del emulador de referencia (GPL/MPL/no comercial)
+  **y** código del juego original. No lo distribuyas. Cada cartucho recompilado incluye una
+  entrada `licence` que nombra esos componentes.
+- Usa solo ROMs que poseas legalmente. La herramienta no incluye juegos.
+
+**Mantenimiento**
+
+```bash
+# Actualizar romdevtools
+toolbox run /usr/bin/npm-24 install --global romdevtools@latest
+
+# Ver la versión instalada y la que corre
+toolbox run /usr/bin/node-24 -p "require('$HOME/.npm-global/lib/node_modules/romdevtools/package.json').version"
+curl -s http://127.0.0.1:7331/healthz
+```
+
+Después de actualizar, reinicia el servidor y OpenCode.
+
+```bash
+# Desinstalar
+toolbox run /usr/bin/npm-24 uninstall --global romdevtools
+rm -f "$HOME/.local/bin/romdev-server"
+```
+
+La caché de npm queda en `~/.npm` y los paquetes instalados en `~/.npm-global`; puedes limpiar
+la caché con `npm-24 cache clean --force` si necesitas recuperar espacio.
+
+### 12. Correcciones a la información de la charla previa
+
+Si llegaste acá desde esa conversación, estas son las diferencias importantes:
+
+1. **romdev no recompila N64, PS2, Xbox, Xbox 360 ni GameCube.** La recompilación estática cubre
+   NES, SNES, GB, GBC, GBA, Master System, Game Gear y Genesis. N64 y PlayStation solo tienen
+   descompilación por coincidencia.
+2. **N64: Recompiled, PS2Recomp, XenonRecomp y xboxrecomp no vienen dentro de romdev.** Son
+   proyectos independientes.
+3. **No hay que configurar Ghidra Flatpak para romdev.** romdev trae el descompilador de Ghidra
+   como WebAssembly. Son instalaciones separadas y no se comunican.
+4. **La configuración de OpenCode 2.x es `mcp.servers`, no `mcp.romdev`.** El README de romdev
+   todavía muestra la forma antigua.
+5. **No hace falta `--share=network` al lanzar el Flatpak** (y `flatpak run` no acepta esa
+   opción). Flatpak comparte la red del host por defecto; si hiciera falta, se usa
+   `flatpak override --user --share=network`.
+6. **`10.0.2.2` no aplica acá.** Es una dirección de NAT de QEMU/VirtualBox, no de Flatpak.
+   `127.0.0.1:7331` es la correcta.
+7. **Node 24 es obligatorio.** El `node` por defecto de Fedora puede ser 22 y no alcanza.
+8. **No es un servicio que se instala “dentro de REA”.** Es otro servidor MCP, con otro puerto y
+   otro ciclo de vida.
+9. **La descompilación por coincidencia no es automática ni mágica.** Requiere proyecto splat,
+   compilador original, comparación por instrucción y, en N64 con IDO, un compilador propietario
+   que no se distribuye.
+10. **Los recompilados no son ports de PC listos para jugar.** Son código generado que hay que
+    verificar y depurar; la herramienta ayuda, no reemplaza el trabajo.
+
+---
+
+## Parte 3 — Comandos directos (TL;DR)
 
 Copia y pega en orden. Los comentarios indican en qué capa va cada bloque.
 
@@ -662,6 +1056,11 @@ cat > ~/.var/app/ai.opencode.opencode/config/opencode/opencode.json <<'EOF'
         "type": "remote",
         "url": "http://127.0.0.1:8082/mcp",
         "oauth": false
+      },
+      "romdev": {
+        "type": "remote",
+        "url": "http://127.0.0.1:7331/mcp",
+        "oauth": false
       }
     }
   }
@@ -669,15 +1068,15 @@ cat > ~/.var/app/ai.opencode.opencode/config/opencode/opencode.json <<'EOF'
 EOF
 ```
 
-> Si ya tienes otros servidores MCP, agrega `rea` dentro de `servers` en vez de reemplazar el
-> archivo completo.
+> Si ya tienes otros servidores MCP, agrega `rea` y `romdev` dentro de `servers` en vez de
+> reemplazar el archivo completo. Si no instalaste la Parte 2, omite el bloque `romdev`.
 
 ### 5. Host: reiniciar OpenCode
 
 ```bash
 flatpak kill ai.opencode.opencode
 flatpak run ai.opencode.opencode
-# /mcp  →  rea conectado
+# /mcp  →  rea y romdev conectados (romdev si hiciste la Parte 2)
 ```
 
 ### 6. Prueba de fuego
@@ -692,4 +1091,54 @@ Si no tienes un binario a mano:
 
 ```text
 Usa rea para abrir /usr/bin/ls con Ghidra y mostrarme el binary_overview.
+```
+
+### 7. romdevtools (opcional)
+
+**Toolbox:**
+
+```bash
+toolbox enter
+
+sudo dnf install -y nodejs24 nodejs24-npm   # Fedora 43+
+npm-24 config set prefix "$HOME/.npm-global"
+npm-24 install --global romdevtools
+
+cat > "$HOME/.local/bin/romdev-server" <<'EOF'
+#!/bin/sh
+exec /usr/bin/node-24 "$HOME/.npm-global/lib/node_modules/romdevtools/src/mcp/server.js" "$@"
+EOF
+chmod +x "$HOME/.local/bin/romdev-server"
+
+exit
+```
+
+**Host — terminal aparte, déjala viva:**
+
+```bash
+toolbox run "$HOME/.local/bin/romdev-server"
+```
+
+**Host — comprobar:**
+
+```bash
+ss -ltnp | grep 7331
+curl -s http://127.0.0.1:7331/healthz
+```
+
+**OpenCode — agregar al JSON de la sección 4:**
+
+```json
+"romdev": {
+  "type": "remote",
+  "url": "http://127.0.0.1:7331/mcp",
+  "oauth": false
+}
+```
+
+Reinicia OpenCode y prueba:
+
+```text
+Usa romdev para crear un ejemplo de Game Boy en ~/roms/demo, compilarlo con
+build({output:'run'}) y mostrarme el screenshot del primer frame.
 ```
