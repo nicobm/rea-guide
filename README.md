@@ -633,12 +633,10 @@ exit
 ### 3. Host: arrancar el proxy (déjalo vivo en una terminal)
 
 ```bash
-GHIDRA_FLATPAK=/run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra
-
 toolbox run "$HOME/.local/bin/mcp-proxy" \
   --stateless --port 8082 --host 127.0.0.1 \
   --pass-environment \
-  -e GHIDRA_INSTALL_DIR "$GHIDRA_FLATPAK" \
+  -e GHIDRA_INSTALL_DIR /run/host/var/lib/flatpak/app/org.ghidra_sre.Ghidra/current/active/files/lib/ghidra \
   -e REA_ANALYSIS_PROVIDER ghidra \
   -- "$HOME/.npm-global/bin/rea" mcp
 ```
