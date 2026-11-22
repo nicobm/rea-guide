@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#070b10">
   <meta name="description" content="Guía para montar OpenCode + Ghidra + REA + romdevtools en Fedora Silverblue: ingeniería inversa, ROMs, descompilación y recompilación.">
   <meta property="og:title" content="OpenCode + Ghidra + REA + romdev">
   <meta property="og:description" content="Guía de ingeniería inversa y recompilación de videojuegos en Fedora Silverblue.">
@@ -11,14 +12,21 @@
   <title>OpenCode + Ghidra + REA + romdev · Guía</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f14'/%3E%3Cpath d='M18 44V20h13c7 0 11 3.6 11 9.2 0 4.2-2.3 7.1-6.2 8.3L44 44h-8.4l-6.7-6H26v6h-8Zm8-12h5c2.5 0 4-1.1 4-3.1S33.5 26 31 26h-5v6Z' fill='%234ade80'/%3E%3C/svg%3E">
   <script>
-    try {
-      var saved = localStorage.getItem('rea-guide-theme');
-      var prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
-      document.documentElement.dataset.theme = saved || (prefersLight ? 'light' : 'dark');
-    } catch (e) {}
+    /* Aplica el tema guardado antes del primer pintado para evitar el flash del palette incorrecto. */
+    (function () {
+      var theme;
+      try { theme = localStorage.getItem('rea-guide-theme'); } catch (e) {}
+      if (theme !== 'light' && theme !== 'dark') {
+        theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+      document.documentElement.dataset.theme = theme;
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f8fb' : '#070b10');
+    })();
   </script>
   <style>
     :root {
+      color-scheme: dark;
       --bg: #070b10;
       --bg-elev: #0b1119;
       --card: #0d1520;
@@ -44,6 +52,7 @@
     }
 
     :root[data-theme="light"] {
+      color-scheme: light;
       --bg: #f6f8fb;
       --bg-elev: #ffffff;
       --card: #ffffff;
@@ -62,6 +71,24 @@
       --code-bg: #0b1118;
       --shadow: 0 24px 60px rgba(15, 23, 42, .10);
       --shadow-soft: 0 10px 30px rgba(15, 23, 42, .07);
+    }
+
+    /*
+     * Transición de tema: solo se activa durante ~240 ms después de un cambio.
+     * Fuera de esa ventana, los hover/transform normales siguen intactos.
+     */
+    html.theme-transition,
+    html.theme-transition *,
+    html.theme-transition *::before,
+    html.theme-transition *::after {
+      transition:
+        background-color 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        color 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        box-shadow 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        fill 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        stroke 240ms cubic-bezier(0.4, 0, 0.2, 1),
+        outline-color 240ms cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -706,6 +733,10 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+      html.theme-transition,
+      html.theme-transition *,
+      html.theme-transition *::before,
+      html.theme-transition *::after { transition-duration: .001ms !important; }
     }
 
     @media print {
@@ -822,7 +853,7 @@
 
       <footer class="page-footer">
         <span>Guía mantenida en <a href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">github.com/nicobm/rea-guide</a></span>
-        <span>Contenido cargado desde <a href="README.md">README.md</a> · <a href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">editar en GitHub</a></span>
+        <span>Contenido cargado desde <a href="https://github.com/nicobm/rea-guide/blob/main/README.md" target="_blank" rel="noopener noreferrer">README.md</a> · <a href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">editar en GitHub</a></span>
       </footer>
     </main>
   </div>
@@ -895,23 +926,86 @@
 
       /* ---------- Tema ---------- */
 
+      var THEME_KEY = 'rea-guide-theme';
+      var THEME_TRANSITION_MS = 240;
+      var themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      var themeTimer = null;
+
       function storedTheme() {
-        try { return localStorage.getItem('rea-guide-theme'); } catch (e) { return null; }
+        try {
+          var value = localStorage.getItem(THEME_KEY);
+          return value === 'light' || value === 'dark' ? value : null;
+        } catch (e) {
+          return null;
+        }
       }
 
-      function applyTheme(theme) {
-        document.documentElement.dataset.theme = theme;
-        try { localStorage.setItem('rea-guide-theme', theme); } catch (e) {}
-        var next = theme === 'dark' ? 'light' : 'dark';
+      function systemTheme() {
+        return themeMedia && themeMedia.matches ? 'dark' : 'light';
+      }
+
+      function currentTheme() {
+        return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      }
+
+      function updateThemeColor(theme) {
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f8fb' : '#070b10');
+      }
+
+      function syncThemeButton() {
+        var next = currentTheme() === 'dark' ? 'light' : 'dark';
         themeBtn.setAttribute('aria-label', 'Cambiar a tema ' + (next === 'dark' ? 'oscuro' : 'claro'));
         themeBtn.setAttribute('title', 'Tema ' + (next === 'dark' ? 'oscuro' : 'claro'));
       }
 
-      applyTheme(document.documentElement.dataset.theme || storedTheme() || 'dark');
+      function applyTheme(theme, animate) {
+        if (theme !== 'light' && theme !== 'dark') return;
+        var root = document.documentElement;
+        var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        if (animate && !reduceMotion) {
+          root.classList.add('theme-transition');
+          if (themeTimer) clearTimeout(themeTimer);
+          themeTimer = window.setTimeout(function () {
+            root.classList.remove('theme-transition');
+            themeTimer = null;
+          }, THEME_TRANSITION_MS);
+        }
+
+        root.setAttribute('data-theme', theme);
+        updateThemeColor(theme);
+        syncThemeButton();
+      }
 
       themeBtn.addEventListener('click', function () {
-        applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+        var next = currentTheme() === 'dark' ? 'light' : 'dark';
+        applyTheme(next, true);
+        try {
+          // Elegir manualmente lo mismo que el sistema no es un override: seguimos al sistema.
+          if (next === systemTheme()) localStorage.removeItem(THEME_KEY);
+          else localStorage.setItem(THEME_KEY, next);
+        } catch (e) {}
       });
+
+      // Sigue al sistema en vivo. Un override manual se respeta hasta que coincide
+      // otra vez con el sistema, momento en que la página vuelve al modo automático.
+      if (themeMedia) {
+        var onSystemThemeChange = function (event) {
+          var next = event.matches ? 'dark' : 'light';
+          var override = storedTheme();
+          if (override && override !== next) return;
+          if (override) {
+            try { localStorage.removeItem(THEME_KEY); } catch (e) {}
+          }
+          applyTheme(next, true);
+        };
+
+        if (themeMedia.addEventListener) themeMedia.addEventListener('change', onSystemThemeChange);
+        else if (themeMedia.addListener) themeMedia.addListener(onSystemThemeChange);
+      }
+
+      applyTheme(storedTheme() || systemTheme(), false);
 
       /* ---------- Menú móvil ---------- */
 
@@ -1183,16 +1277,37 @@
 
       /* ---------- Carga del README ---------- */
 
+      var RAW_README = 'https://raw.githubusercontent.com/nicobm/rea-guide/main/README.md';
+
+      function looksLikeMarkdown(text) {
+        var start = (text || '').replace(/^\uFEFF/, '').trimStart().slice(0, 300).toLowerCase();
+        return start.indexOf('<!doctype') !== 0 && start.indexOf('<html') !== 0 && start.indexOf('<body') !== 0;
+      }
+
+      function fetchText(url) {
+        return fetch(url, { cache: 'no-cache' }).then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status + ' en ' + url);
+          return response.text();
+        });
+      }
+
       function loadGuide() {
         if (!window.marked) {
           showError(new Error('No se pudo cargar marked desde el CDN'));
           return;
         }
 
-        fetch('README.md', { cache: 'no-cache' })
-          .then(function (response) {
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            return response.text();
+        fetchText('README.md')
+          .then(function (markdown) {
+            // Si GitHub Pages procesó el README como página, devuelve HTML.
+            if (!looksLikeMarkdown(markdown)) throw new Error('README.md no contiene markdown');
+            return markdown;
+          })
+          .catch(function (localError) {
+            // Fallback para GitHub Pages con Jekyll o para file://.
+            return fetchText(RAW_README).catch(function (rawError) {
+              throw new Error(localError.message + ' / ' + rawError.message);
+            });
           })
           .then(function (markdown) {
             var html = marked.parse(markdown, { gfm: true, breaks: false });
