@@ -148,7 +148,7 @@ Reglas prácticas:
 
 - OpenCode instalado como Flatpak (`ai.opencode.opencode`).
 - Ghidra instalado como Flatpak (`org.ghidra_sre.Ghidra`); lo hacemos en el Paso 1.
-- Puerto `8082` libre en el host (y `7331` si vas a usar la Parte 2).
+- Puertos `8082` y `7331` libres en el host.
 - ~3–4 GB libres para Ghidra, el JDK y las dependencias. romdevtools suma varios cientos de MB
   más y carga los binarios de cada plataforma la primera vez que la usas.
 
@@ -614,9 +614,12 @@ Estas son las diferencias importantes respecto de la versión que circuló con e
 
 ## Parte 2 — romdevtools: ROMs y recompilación
 
-Esta parte es **opcional e independiente** de la Parte 1. No modifica REA ni Ghidra: agrega un
-segundo servidor MCP para trabajar con ROMs de consolas, compilar homebrew, ejecutar el juego en
-un core de emulador, inspeccionar memoria y generar proyectos de descompilación o de
+Esta parte es **independiente y complementaria** de la Parte 1. REA + Ghidra trabajan binarios
+nativos; romdevtools trabaja ROMs, emuladores y recompilación. Forma parte del flujo normal: se
+instala y configura igual que REA, y la guía asume que vas a tener los dos servidores MCP
+disponibles.
+romdevtools no modifica REA ni Ghidra: es un segundo servidor MCP para compilar homebrew, ejecutar
+el juego en un core de emulador, inspeccionar memoria y generar proyectos de descompilación o de
 recompilación estática.
 
 ### 1. Qué añade romdevtools
@@ -805,7 +808,9 @@ Agrega `romdev` **junto a** `rea` en el mismo archivo
 }
 ```
 
-Si solo quieres romdev, borra el bloque `rea`; si solo quieres REA, no agregues `romdev`.
+Los dos servidores quedan configurados y se conectan automáticamente. Si en una sesión no quieres
+usar uno, desconéctalo desde `/mcps` en OpenCode: eso no borra la configuración. Para dejarlo
+desconectado de forma permanente, agrega `"disabled": true` a su bloque.
 
 Notas:
 
@@ -1069,14 +1074,15 @@ EOF
 ```
 
 > Si ya tienes otros servidores MCP, agrega `rea` y `romdev` dentro de `servers` en vez de
-> reemplazar el archivo completo. Si no instalaste la Parte 2, omite el bloque `romdev`.
+> reemplazar el archivo completo. Los dos quedan configurados; puedes conectarlos o
+> desconectarlos desde `/mcps` sin editar el JSON.
 
 ### 5. Host: reiniciar OpenCode
 
 ```bash
 flatpak kill ai.opencode.opencode
 flatpak run ai.opencode.opencode
-# /mcp  →  rea y romdev conectados (romdev si hiciste la Parte 2)
+# /mcp  →  rea y romdev conectados
 ```
 
 ### 6. Prueba de fuego
@@ -1093,7 +1099,7 @@ Si no tienes un binario a mano:
 Usa rea para abrir /usr/bin/ls con Ghidra y mostrarme el binary_overview.
 ```
 
-### 7. romdevtools (opcional)
+### 7. romdevtools
 
 **Toolbox:**
 
@@ -1126,7 +1132,7 @@ ss -ltnp | grep 7331
 curl -s http://127.0.0.1:7331/healthz
 ```
 
-**OpenCode — agregar al JSON de la sección 4:**
+**OpenCode — bloque ya incluido en el JSON de la sección 4:**
 
 ```json
 "romdev": {
@@ -1135,6 +1141,9 @@ curl -s http://127.0.0.1:7331/healthz
   "oauth": false
 }
 ```
+
+Ambos servidores se conectan al iniciar OpenCode. Usa `/mcps` para conectar o desconectar `rea` y
+`romdev` sin tocar el archivo.
 
 Reinicia OpenCode y prueba:
 
