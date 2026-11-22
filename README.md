@@ -1049,6 +1049,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/mcp   # 406
 
 ### 4. Host: configurar OpenCode
 
+El archivo debe quedar con **los dos servidores**, `rea` y `romdev`:
+
 ```bash
 mkdir -p ~/.var/app/ai.opencode.opencode/config/opencode
 
@@ -1132,13 +1134,26 @@ ss -ltnp | grep 7331
 curl -s http://127.0.0.1:7331/healthz
 ```
 
-**OpenCode — bloque ya incluido en el JSON de la sección 4:**
+**OpenCode — el JSON completo con ambos servidores ya está en la sección 4.** Así tiene que
+quedar:
 
 ```json
-"romdev": {
-  "type": "remote",
-  "url": "http://127.0.0.1:7331/mcp",
-  "oauth": false
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "rea": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8082/mcp",
+        "oauth": false
+      },
+      "romdev": {
+        "type": "remote",
+        "url": "http://127.0.0.1:7331/mcp",
+        "oauth": false
+      }
+    }
+  }
 }
 ```
 
