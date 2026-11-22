@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Guía para montar OpenCode + Ghidra + REA + romdevtools en Fedora Silverblue: ingeniería inversa, ROMs, descompilación y recompilación.">
+  <meta property="og:title" content="OpenCode + Ghidra + REA + romdev">
+  <meta property="og:description" content="Guía de ingeniería inversa y recompilación de videojuegos en Fedora Silverblue.">
+  <meta property="og:type" content="website">
+  <title>OpenCode + Ghidra + REA + romdev · Guía</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f14'/%3E%3Cpath d='M18 44V20h13c7 0 11 3.6 11 9.2 0 4.2-2.3 7.1-6.2 8.3L44 44h-8.4l-6.7-6H26v6h-8Zm8-12h5c2.5 0 4-1.1 4-3.1S33.5 26 31 26h-5v6Z' fill='%234ade80'/%3E%3C/svg%3E">
+  <script>
+    try {
+      var saved = localStorage.getItem('rea-guide-theme');
+      var prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+      document.documentElement.dataset.theme = saved || (prefersLight ? 'light' : 'dark');
+    } catch (e) {}
+  </script>
+  <style>
+    :root {
+      --bg: #070b10;
+      --bg-elev: #0b1119;
+      --card: #0d1520;
+      --card-2: #111c29;
+      --border: #1d2a3a;
+      --border-strong: #2a3b4f;
+      --text: #e7eef7;
+      --muted: #93a5ba;
+      --muted-2: #6f8298;
+      --accent: #4ade80;
+      --accent-2: #38bdf8;
+      --accent-3: #c084fc;
+      --accent-soft: rgba(74, 222, 128, .12);
+      --accent-line: rgba(74, 222, 128, .45);
+      --grid: rgba(255, 255, 255, .045);
+      --code-bg: #080d13;
+      --shadow: 0 24px 60px rgba(0, 0, 0, .42);
+      --shadow-soft: 0 10px 30px rgba(0, 0, 0, .22);
+      --topbar: 64px;
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    :root[data-theme="light"] {
+      --bg: #f6f8fb;
+      --bg-elev: #ffffff;
+      --card: #ffffff;
+      --card-2: #eef3f8;
+      --border: #d9e2ec;
+      --border-strong: #c3d0de;
+      --text: #0f172a;
+      --muted: #52647a;
+      --muted-2: #74849a;
+      --accent: #0f8a4a;
+      --accent-2: #0369a1;
+      --accent-3: #7c3aed;
+      --accent-soft: rgba(15, 138, 74, .10);
+      --accent-line: rgba(15, 138, 74, .40);
+      --grid: rgba(15, 23, 42, .05);
+      --code-bg: #0b1118;
+      --shadow: 0 24px 60px rgba(15, 23, 42, .10);
+      --shadow-soft: 0 10px 30px rgba(15, 23, 42, .07);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        radial-gradient(70rem 45rem at 10% -12%, rgba(56, 189, 248, .11), transparent 62%),
+        radial-gradient(60rem 40rem at 100% 0%, rgba(74, 222, 128, .09), transparent 60%),
+        radial-gradient(50rem 40rem at 50% 110%, rgba(192, 132, 252, .06), transparent 60%);
+    }
+    ::selection { background: rgba(74, 222, 128, .25); color: var(--text); }
+    a { color: var(--accent-2); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: var(--accent); }
+    :focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 6px; }
+    img { max-width: 100%; height: auto; }
+    button, input { font: inherit; }
+
+    .skip-link {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 200;
+      transform: translateY(-160%);
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #04120a;
+      font-weight: 700;
+      text-decoration: none;
+      transition: transform .18s ease;
+    }
+    .skip-link:focus { transform: none; }
+
+    #progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      height: 2px;
+      width: 0;
+      z-index: 120;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2) 60%, var(--accent-3));
+      box-shadow: 0 0 14px rgba(56, 189, 248, .55);
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 80;
+      height: var(--topbar);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(16px) saturate(140%);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+    }
+    .topbar-inner {
+      max-width: 1440px;
+      height: 100%;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 750;
+      letter-spacing: -.02em;
+      white-space: nowrap;
+    }
+    .brand .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+      color: #04120a;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 22px rgba(74, 222, 128, .30);
+    }
+    .brand small {
+      color: var(--muted-2);
+      font-weight: 550;
+      font-size: 12px;
+      letter-spacing: .02em;
+    }
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .16s ease, color .16s ease, border-color .16s ease;
+    }
+    .icon-btn:hover { background: var(--card-2); color: var(--text); border-color: var(--border); }
+    .icon-btn svg { width: 19px; height: 19px; display: block; }
+    #menuBtn { display: none; }
+    :root[data-theme="dark"] .icon-moon { display: none; }
+    :root[data-theme="light"] .icon-sun { display: none; }
+
+    .layout {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 26px 24px 64px;
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 42px;
+      align-items: start;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: calc(var(--topbar) + 22px);
+      max-height: calc(100vh - var(--topbar) - 44px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .sidebar-card {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--card) 88%, transparent);
+      box-shadow: var(--shadow-soft);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .search {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .search svg {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      transform: translateY(-50%);
+      color: var(--muted-2);
+      pointer-events: none;
+    }
+    .search input {
+      width: 100%;
+      padding: 10px 12px 10px 35px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-elev);
+      color: var(--text);
+      font-size: 13.5px;
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+    .search input::placeholder { color: var(--muted-2); }
+    .search input:focus {
+      outline: none;
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, .13);
+    }
+    .toc {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+    .toc::-webkit-scrollbar { width: 8px; }
+    .toc::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 20px; }
+    .toc-group { padding: 5px 0 9px; border-bottom: 1px dashed var(--border); }
+    .toc-group:last-child { border-bottom: 0; padding-bottom: 2px; }
+    .toc-link {
+      display: block;
+      padding: 6px 9px;
+      margin: 1px 0;
+      border-left: 2px solid transparent;
+      border-radius: 0 8px 8px 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+      text-decoration: none;
+      transition: background .14s ease, color .14s ease, border-color .14s ease;
+    }
+    .toc-link:hover { background: var(--card-2); color: var(--text); }
+    .toc-h2 { color: var(--text); font-weight: 650; }
+    .toc-h3 { padding-left: 20px; font-size: 12.5px; }
+    .toc-link.active {
+      color: var(--text);
+      background: var(--accent-soft);
+      border-left-color: var(--accent);
+      font-weight: 650;
+    }
+    .toc-empty { padding: 14px 8px; color: var(--muted-2); font-size: 13px; text-align: center; }
+    .sidebar-foot {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--card) 70%, transparent);
+      color: var(--muted-2);
+      font-size: 11.5px;
+    }
+    kbd {
+      display: inline-block;
+      min-width: 19px;
+      padding: 1px 5px;
+      border: 1px solid var(--border-strong);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: var(--card-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    main { min-width: 0; max-width: 940px; }
+    .hero {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      margin-bottom: 36px;
+      padding: clamp(24px, 4.6vw, 46px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background:
+        radial-gradient(820px 320px at 8% -25%, rgba(56, 189, 248, .18), transparent 62%),
+        radial-gradient(640px 280px at 102% -5%, rgba(74, 222, 128, .16), transparent 60%),
+        var(--card);
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 30px 30px;
+      mask-image: radial-gradient(circle at 15% 0%, #000 0%, transparent 72%);
+      -webkit-mask-image: radial-gradient(circle at 15% 0%, #000 0%, transparent 72%);
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      color: var(--accent-2);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 650;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 22px;
+      height: 1px;
+      background: linear-gradient(90deg, var(--accent), transparent);
+    }
+    .hero h1 {
+      margin: 0;
+      max-width: 20ch;
+      font-size: clamp(2.1rem, 5.2vw, 3.45rem);
+      line-height: 1.04;
+      letter-spacing: -.045em;
+      font-weight: 820;
+    }
+    .grad {
+      background: linear-gradient(100deg, var(--accent) 5%, var(--accent-2) 52%, var(--accent-3) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .hero p {
+      max-width: 68ch;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: clamp(14.5px, 1.5vw, 16.5px);
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--card-2) 70%, transparent);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .chip::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      background: var(--card-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 650;
+      text-decoration: none;
+      transition: transform .15s ease, background .15s ease, border-color .15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); border-color: var(--accent-2); color: var(--text); }
+    .btn.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--accent), #22d3ee);
+      color: #04120a;
+      box-shadow: 0 10px 28px rgba(74, 222, 128, .24);
+    }
+    .btn.primary:hover { color: #04120a; filter: brightness(1.05); }
+    .btn svg { width: 16px; height: 16px; }
+
+    .markdown-body {
+      font-size: 16px;
+      line-height: 1.74;
+      color: var(--text);
+      overflow-wrap: break-word;
+    }
+    .markdown-body > *:first-child { margin-top: 0; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3,
+    .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+      position: relative;
+      scroll-margin-top: calc(var(--topbar) + 26px);
+      line-height: 1.22;
+      letter-spacing: -.02em;
+      font-weight: 740;
+    }
+    .markdown-body h2 {
+      margin: 3.2rem 0 1.1rem;
+      padding: 0 0 .55rem .8rem;
+      border-left: 3px solid var(--accent);
+      border-bottom: 1px solid var(--border);
+      font-size: clamp(1.5rem, 2.7vw, 1.9rem);
+    }
+    .markdown-body h2:first-of-type { margin-top: 0; }
+    .markdown-body h3 {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 2.3rem 0 .7rem;
+      font-size: clamp(1.12rem, 2vw, 1.3rem);
+    }
+    .markdown-body h3::before {
+      content: "";
+      flex: 0 0 auto;
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: linear-gradient(135deg, var(--accent-2), var(--accent-3));
+      box-shadow: 0 0 10px rgba(56, 189, 248, .35);
+      transform: translateY(1px);
+    }
+    .markdown-body h4 { margin: 1.8rem 0 .5rem; font-size: 1.02rem; color: var(--accent-2); }
+    .heading-anchor {
+      margin-left: 4px;
+      color: var(--muted-2);
+      font-weight: 400;
+      text-decoration: none;
+      opacity: 0;
+      transition: opacity .14s ease, color .14s ease;
+    }
+    .markdown-body h1:hover .heading-anchor,
+    .markdown-body h2:hover .heading-anchor,
+    .markdown-body h3:hover .heading-anchor,
+    .markdown-body h4:hover .heading-anchor,
+    .heading-anchor:focus { opacity: 1; }
+    .heading-anchor:hover { color: var(--accent); }
+    .markdown-body p { margin: 0 0 1.05rem; }
+    .markdown-body strong { color: var(--text); font-weight: 700; }
+    .markdown-body em { color: var(--muted); }
+    .markdown-body a { font-weight: 500; }
+    .markdown-body ul, .markdown-body ol { margin: 0 0 1.1rem; padding-left: 1.45rem; }
+    .markdown-body li { margin: .32rem 0; }
+    .markdown-body li::marker { color: var(--accent); }
+    .markdown-body hr {
+      height: 1px;
+      margin: 2.6rem 0;
+      border: 0;
+      background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+    }
+    .markdown-body blockquote {
+      margin: 1.3rem 0;
+      padding: 13px 17px;
+      border-left: 3px solid var(--accent);
+      border-radius: 0 12px 12px 0;
+      background: linear-gradient(90deg, var(--accent-soft), transparent 82%);
+      color: var(--muted);
+    }
+    .markdown-body blockquote p:last-child { margin-bottom: 0; }
+    .markdown-body :not(pre) > code {
+      padding: .13em .38em;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--card-2);
+      color: var(--accent-2);
+      font-family: var(--mono);
+      font-size: .865em;
+      white-space: break-spaces;
+    }
+    .markdown-body pre {
+      position: relative;
+      margin: 1.25rem 0;
+      padding: 16px 18px;
+      overflow: auto;
+      border: 1px solid var(--border-strong);
+      border-radius: 13px;
+      background: var(--code-bg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), var(--shadow-soft);
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+    .markdown-body pre::-webkit-scrollbar { height: 9px; }
+    .markdown-body pre::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 20px; }
+    .markdown-body pre code {
+      display: block;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #d6e2f0;
+      font-family: var(--mono);
+      font-size: 13.2px;
+      line-height: 1.62;
+      white-space: pre;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 2;
+      padding: 5px 9px;
+      border: 1px solid #2b3b4f;
+      border-radius: 7px;
+      background: rgba(17, 28, 41, .92);
+      color: #93a5ba;
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity .14s ease, color .14s ease, border-color .14s ease;
+    }
+    .markdown-body pre:hover .copy-btn,
+    .copy-btn:focus { opacity: 1; }
+    .copy-btn:hover { color: #e7eef7; border-color: #4ade80; }
+    .copy-btn.copied { color: #4ade80; border-color: #4ade80; }
+    @media (hover: none) { .copy-btn { opacity: 1; } }
+
+    .table-wrap {
+      margin: 1.3rem 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--card) 70%, transparent);
+    }
+    .markdown-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.8px;
+      line-height: 1.55;
+    }
+    .markdown-body th, .markdown-body td {
+      padding: 10px 13px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      text-align: left;
+    }
+    .markdown-body th {
+      background: var(--card-2);
+      color: var(--text);
+      font-weight: 680;
+      white-space: nowrap;
+    }
+    .markdown-body tbody tr:nth-child(even) { background: color-mix(in srgb, var(--card-2) 45%, transparent); }
+    .markdown-body tbody tr:last-child td { border-bottom: 0; }
+    .markdown-body td code, .markdown-body th code { white-space: nowrap; }
+
+    .page-footer {
+      margin-top: 54px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: space-between;
+      color: var(--muted-2);
+      font-size: 12.5px;
+    }
+    .page-footer a { color: var(--muted); }
+    .page-footer a:hover { color: var(--accent); }
+
+    .skeleton { padding: 12px 0; }
+    .skeleton-line {
+      height: 14px;
+      margin: 12px 0;
+      border-radius: 7px;
+      background: linear-gradient(90deg, var(--card-2) 20%, var(--border) 38%, var(--card-2) 56%);
+      background-size: 220% 100%;
+      animation: shimmer 1.35s linear infinite;
+    }
+    .skeleton-line.w40 { width: 40%; height: 28px; }
+    .skeleton-line.w70 { width: 70%; }
+    .skeleton-line.w90 { width: 90%; }
+    @keyframes shimmer { to { background-position: -220% 0; } }
+
+    .error-card {
+      padding: 26px;
+      border: 1px solid rgba(248, 113, 113, .35);
+      border-radius: 16px;
+      background: rgba(248, 113, 113, .06);
+    }
+    .error-card h2 { margin-top: 0; border: 0; padding-left: 0; color: #f87171; }
+    .error-card code { white-space: break-spaces; }
+
+    #toTop {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 70;
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--card) 88%, transparent);
+      color: var(--muted);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(10px);
+      transition: opacity .18s ease, transform .18s ease, color .18s ease, border-color .18s ease;
+    }
+    #toTop.show { opacity: 1; pointer-events: auto; transform: none; }
+    #toTop:hover { color: var(--accent); border-color: var(--accent); }
+    #toTop svg { width: 18px; height: 18px; }
+
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: var(--topbar) 0 0;
+      z-index: 55;
+      background: rgba(4, 8, 13, .62);
+      backdrop-filter: blur(3px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease;
+    }
+
+    @media (max-width: 1040px) {
+      .layout { grid-template-columns: 264px minmax(0, 1fr); gap: 28px; }
+    }
+
+    @media (max-width: 900px) {
+      .topbar-inner { padding: 0 16px; }
+      #menuBtn { display: inline-grid; }
+      .brand small { display: none; }
+      .layout { grid-template-columns: 1fr; padding: 18px 16px 54px; }
+      .sidebar {
+        position: fixed;
+        top: var(--topbar);
+        left: 0;
+        bottom: 0;
+        z-index: 60;
+        width: min(330px, 88vw);
+        max-height: none;
+        padding: 14px;
+        border-right: 1px solid var(--border);
+        background: var(--bg-elev);
+        box-shadow: var(--shadow);
+        transform: translateX(-105%);
+        transition: transform .24s ease;
+      }
+      body.nav-open .sidebar { transform: none; }
+      .sidebar-card { max-height: calc(100vh - var(--topbar) - 78px); }
+      .overlay { display: block; }
+      body.nav-open .overlay { opacity: 1; pointer-events: auto; }
+      main { max-width: none; }
+      .hero { border-radius: 20px; }
+    }
+
+    @media (max-width: 520px) {
+      .hero { padding: 22px; }
+      .hero h1 { font-size: clamp(1.9rem, 10vw, 2.5rem); }
+      .markdown-body { font-size: 15.2px; }
+      .markdown-body pre { padding: 14px; border-radius: 11px; }
+      .markdown-body pre code { font-size: 12.4px; }
+      .brand span.label { display: none; }
+      .page-footer { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    @media print {
+      body::before, #progress, .topbar, .sidebar, .overlay, #toTop, .copy-btn, .hero-actions { display: none !important; }
+      .layout { display: block; max-width: none; padding: 0; }
+      main { max-width: none; }
+      .hero { box-shadow: none; border: 0; padding: 0; margin-bottom: 18px; background: transparent; }
+      .hero::after { display: none; }
+      .markdown-body { font-size: 11pt; }
+      .markdown-body a { color: inherit; text-decoration: underline; }
+      .markdown-body pre { white-space: pre-wrap; box-shadow: none; break-inside: avoid; }
+      .markdown-body h2, .markdown-body h3 { break-after: avoid; }
+      .heading-anchor { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">Saltar al contenido</a>
+  <div id="progress" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <button class="icon-btn" id="menuBtn" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
+      <a class="brand" href="#">
+        <span class="mark">R</span>
+        <span class="label">REA Guide</span>
+        <small>OpenCode · Ghidra · romdev</small>
+      </a>
+      <div class="top-actions">
+        <button class="icon-btn" id="printBtn" type="button" aria-label="Imprimir o guardar como PDF" title="Imprimir / PDF">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7" rx="1"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="Cambiar tema" title="Cambiar tema">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/>
+          </svg>
+        </button>
+        <a class="icon-btn" id="repoLink" href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer" aria-label="Ver repositorio en GitHub" title="Ver en GitHub">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5A11.5 11.5 0 0 0 .5 12.1c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6a11.5 11.5 0 0 0 7.9-10.9A11.5 11.5 0 0 0 12 .5Z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="overlay" id="overlay" aria-hidden="true"></div>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Índice de la guía">
+      <div class="sidebar-card">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+          </svg>
+          <input id="tocSearch" type="search" placeholder="Buscar sección…" aria-label="Buscar sección" autocomplete="off" spellcheck="false">
+        </div>
+        <nav class="toc" id="toc" aria-label="Secciones"></nav>
+        <div class="toc-empty" id="tocEmpty" hidden>Sin resultados</div>
+      </div>
+      <div class="sidebar-foot">
+        <span>Atajo: <kbd>/</kbd> buscar</span>
+        <span id="tocCount">—</span>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" aria-labelledby="heroTitle">
+        <div class="eyebrow">Ingeniería inversa · ROMs · recompilación</div>
+        <h1 id="heroTitle">OpenCode + Ghidra + <span class="grad">REA + romdev</span></h1>
+        <p>
+          Guía práctica para montar un entorno de análisis y recompilación de videojuegos en
+          Fedora Silverblue, con OpenCode como agente y dos servidores MCP: REA para binarios
+          nativos y romdevtools para consolas retro.
+        </p>
+        <div class="chips">
+          <span class="chip">Fedora Silverblue</span>
+          <span class="chip">Ghidra 12.1.3</span>
+          <span class="chip">OpenCode 2.1.3</span>
+          <span class="chip">rea-agents 6.7.0</span>
+          <span class="chip">romdevtools 0.156.3</span>
+        </div>
+        <div class="hero-actions">
+          <a class="btn primary" href="#parte-1--guía-detallada">
+            Empezar la guía
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <a class="btn" href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">
+            Ver repositorio
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+          </a>
+        </div>
+      </section>
+
+      <article class="markdown-body" id="content" aria-live="polite">
+        <div class="skeleton" aria-label="Cargando guía">
+          <div class="skeleton-line w40"></div>
+          <div class="skeleton-line w90"></div>
+          <div class="skeleton-line w70"></div>
+          <div class="skeleton-line w90"></div>
+          <div class="skeleton-line w90"></div>
+          <div class="skeleton-line w70"></div>
+        </div>
+      </article>
+
+      <footer class="page-footer">
+        <span>Guía mantenida en <a href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">github.com/nicobm/rea-guide</a></span>
+        <span>Contenido cargado desde <a href="README.md">README.md</a> · <a href="https://github.com/nicobm/rea-guide" target="_blank" rel="noopener noreferrer">editar en GitHub</a></span>
+      </footer>
+    </main>
+  </div>
+
+  <button id="toTop" type="button" aria-label="Volver arriba" title="Volver arriba">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 19V5M6 11l6-6 6 6"/>
+    </svg>
+  </button>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var content = document.getElementById('content');
+      var toc = document.getElementById('toc');
+      var tocSearch = document.getElementById('tocSearch');
+      var tocEmpty = document.getElementById('tocEmpty');
+      var tocCount = document.getElementById('tocCount');
+      var progress = document.getElementById('progress');
+      var toTop = document.getElementById('toTop');
+      var themeBtn = document.getElementById('themeBtn');
+      var printBtn = document.getElementById('printBtn');
+      var menuBtn = document.getElementById('menuBtn');
+      var overlay = document.getElementById('overlay');
+      var headingData = [];
+      var headingEls = [];
+      var tocLinks = [];
+      var usedIds = new Map();
+
+      /* ---------- Utilidades ---------- */
+
+      function slugify(text) {
+        return text
+          .trim()
+          .toLowerCase()
+          .replace(/[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@\[\]^`{|}~¿¡]/g, '')
+          .replace(/\s/g, '-')
+          .replace(/^-+|-+$/g, '');
+      }
+
+      function uniqueId(base) {
+        var id = base || 'seccion';
+        var count = usedIds.get(id) || 0;
+        usedIds.set(id, count + 1);
+        return count ? id + '-' + count : id;
+      }
+
+      function normalize(text) {
+        return (text || '')
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+      }
+
+      function closeNav() {
+        document.body.classList.remove('nav-open');
+        menuBtn.setAttribute('aria-expanded', 'false');
+        menuBtn.setAttribute('aria-label', 'Abrir menú');
+      }
+
+      function openNav() {
+        document.body.classList.add('nav-open');
+        menuBtn.setAttribute('aria-expanded', 'true');
+        menuBtn.setAttribute('aria-label', 'Cerrar menú');
+      }
+
+      /* ---------- Tema ---------- */
+
+      function storedTheme() {
+        try { return localStorage.getItem('rea-guide-theme'); } catch (e) { return null; }
+      }
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        try { localStorage.setItem('rea-guide-theme', theme); } catch (e) {}
+        var next = theme === 'dark' ? 'light' : 'dark';
+        themeBtn.setAttribute('aria-label', 'Cambiar a tema ' + (next === 'dark' ? 'oscuro' : 'claro'));
+        themeBtn.setAttribute('title', 'Tema ' + (next === 'dark' ? 'oscuro' : 'claro'));
+      }
+
+      applyTheme(document.documentElement.dataset.theme || storedTheme() || 'dark');
+
+      themeBtn.addEventListener('click', function () {
+        applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+      });
+
+      /* ---------- Menú móvil ---------- */
+
+      menuBtn.addEventListener('click', function () {
+        if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+      });
+      overlay.addEventListener('click', closeNav);
+      toc.addEventListener('click', function (event) {
+        if (event.target.closest('a')) closeNav();
+      });
+      window.addEventListener('resize', function () {
+        if (window.innerWidth > 900) closeNav();
+      });
+
+      /* ---------- Render del README ---------- */
+
+      function showError(error) {
+        var message = error && error.message ? error.message : String(error);
+        content.innerHTML =
+          '<div class="error-card">' +
+            '<h2>No se pudo cargar la guía</h2>' +
+            '<p>El navegador no pudo leer <code>README.md</code>. Si estás abriendo el archivo con <code>file://</code>, ' +
+            'levantá un servidor local:</p>' +
+            '<pre><code>python3 -m http.server 8000</code></pre>' +
+            '<p>Después abrí <code>http://127.0.0.1:8000</code>. En GitHub Pages funciona directamente.</p>' +
+            '<p><a href="https://github.com/nicobm/rea-guide/blob/main/README.md" target="_blank" rel="noopener noreferrer">' +
+            'Ver el README en GitHub</a></p>' +
+            '<p><small>Detalle técnico: <code>' + String(message).replace(/[<>&]/g, '') + '</code></small></p>' +
+          '</div>';
+        tocCount.textContent = '—';
+      }
+
+      function removeIndexSection() {
+        var indexHeading = Array.prototype.find.call(content.querySelectorAll('h2'), function (h) {
+          var text = h.textContent.trim().toLowerCase();
+          return text === 'índice' || text === 'indice';
+        });
+        if (!indexHeading) return;
+        var list = indexHeading.nextElementSibling;
+        var after = list ? list.nextElementSibling : null;
+        if (after && after.tagName === 'HR') after.remove();
+        indexHeading.remove();
+        if (list && list.tagName === 'UL') list.remove();
+      }
+
+      function enhance() {
+        var firstH1 = content.querySelector('h1');
+        if (firstH1) firstH1.remove();
+
+        removeIndexSection();
+
+        var allHeadings = content.querySelectorAll('h1, h2, h3, h4');
+        Array.prototype.forEach.call(allHeadings, function (h) {
+          var text = h.textContent.trim();
+          var id = uniqueId(slugify(text));
+          h.id = id;
+
+          if (h.tagName === 'H2' || h.tagName === 'H3') {
+            headingData.push({ id: id, text: text, level: h.tagName === 'H2' ? 2 : 3 });
+            headingEls.push(h);
+
+            var anchor = document.createElement('a');
+            anchor.className = 'heading-anchor';
+            anchor.href = '#' + id;
+            anchor.setAttribute('aria-label', 'Enlazar a esta sección');
+            anchor.textContent = '#';
+            h.appendChild(anchor);
+          }
+        });
+
+        buildToc();
+        wrapTables();
+        addCopyButtons();
+        externalLinks();
+
+        if (window.hljs) {
+          Array.prototype.forEach.call(content.querySelectorAll('pre code'), function (code) {
+            var cls = code.className || '';
+            var match = cls.match(/language-([\w-]+)/);
+            var lang = match ? match[1] : '';
+            if (!lang || lang === 'text') return;
+            try {
+              code.innerHTML = hljs.highlight(code.textContent, { language: lang, ignoreIllegals: true }).value;
+            } catch (e) {
+              try { hljs.highlightElement(code); } catch (e2) {}
+            }
+          });
+        }
+
+        updateScroll();
+      }
+
+      function buildToc() {
+        toc.innerHTML = '';
+        var group = null;
+
+        headingData.forEach(function (item) {
+          if (item.level === 2 || !group) {
+            group = document.createElement('div');
+            group.className = 'toc-group';
+            toc.appendChild(group);
+          }
+          var link = document.createElement('a');
+          link.className = 'toc-link toc-h' + item.level;
+          link.href = '#' + item.id;
+          link.textContent = item.text;
+          link.title = item.text;
+          link.dataset.target = item.id;
+          group.appendChild(link);
+          tocLinks.push(link);
+        });
+
+        tocCount.textContent = headingData.length + ' secciones';
+      }
+
+      function wrapTables() {
+        Array.prototype.forEach.call(content.querySelectorAll('table'), function (table) {
+          var wrap = document.createElement('div');
+          wrap.className = 'table-wrap';
+          table.parentNode.insertBefore(wrap, table);
+          wrap.appendChild(table);
+        });
+      }
+
+      function addCopyButtons() {
+        Array.prototype.forEach.call(content.querySelectorAll('pre'), function (pre) {
+          var code = pre.querySelector('code');
+          if (!code) return;
+
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'copy-btn';
+          button.textContent = 'Copiar';
+          button.setAttribute('aria-label', 'Copiar bloque de código');
+
+          button.addEventListener('click', function () {
+            var text = code.innerText;
+            var done = function () {
+              button.textContent = 'Copiado';
+              button.classList.add('copied');
+              window.setTimeout(function () {
+                button.textContent = 'Copiar';
+                button.classList.remove('copied');
+              }, 1600);
+            };
+            var fail = function () {
+              button.textContent = 'Error';
+              window.setTimeout(function () { button.textContent = 'Copiar'; }, 1600);
+            };
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done, fail);
+            } else {
+              var area = document.createElement('textarea');
+              area.value = text;
+              area.setAttribute('readonly', '');
+              area.style.position = 'fixed';
+              area.style.opacity = '0';
+              document.body.appendChild(area);
+              area.select();
+              try { document.execCommand('copy'); done(); } catch (e) { fail(); }
+              document.body.removeChild(area);
+            }
+          });
+
+          pre.appendChild(button);
+        });
+      }
+
+      function externalLinks() {
+        Array.prototype.forEach.call(content.querySelectorAll('a[href^="http"]'), function (link) {
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+        });
+      }
+
+      /* ---------- Búsqueda del índice ---------- */
+
+      tocSearch.addEventListener('input', function () {
+        var query = normalize(tocSearch.value.trim());
+        var visible = 0;
+
+        Array.prototype.forEach.call(toc.querySelectorAll('.toc-group'), function (group) {
+          var groupVisible = 0;
+          Array.prototype.forEach.call(group.querySelectorAll('.toc-link'), function (link) {
+            var match = !query || normalize(link.textContent).indexOf(query) !== -1;
+            link.hidden = !match;
+            if (match) groupVisible += 1;
+          });
+          group.hidden = groupVisible === 0;
+          visible += groupVisible;
+        });
+
+        tocEmpty.hidden = visible !== 0 || !query;
+        tocCount.textContent = query ? visible + ' resultados' : headingData.length + ' secciones';
+      });
+
+      document.addEventListener('keydown', function (event) {
+        var tag = document.activeElement && document.activeElement.tagName;
+        var typing = tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement.isContentEditable;
+
+        if (event.key === '/' && !typing) {
+          event.preventDefault();
+          if (window.innerWidth <= 900) openNav();
+          tocSearch.focus();
+          tocSearch.select();
+        }
+        if (event.key === 'Escape' && document.activeElement === tocSearch) {
+          tocSearch.value = '';
+          tocSearch.dispatchEvent(new Event('input'));
+          tocSearch.blur();
+        }
+      });
+
+      /* ---------- Scroll: progreso, enlace activo y botón arriba ---------- */
+
+      var ticking = false;
+
+      function updateScroll() {
+        var scrollY = window.scrollY || window.pageYOffset;
+        var doc = document.documentElement;
+        var max = doc.scrollHeight - window.innerHeight;
+        var ratio = max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0;
+        progress.style.width = (ratio * 100) + '%';
+
+        toTop.classList.toggle('show', scrollY > 600);
+
+        var active = null;
+        for (var i = 0; i < headingEls.length; i += 1) {
+          var top = headingEls[i].getBoundingClientRect().top;
+          if (top <= 150) active = headingEls[i]; else break;
+        }
+        if (!active && headingEls.length) active = headingEls[0];
+
+        var activeId = active ? active.id : '';
+        tocLinks.forEach(function (link) {
+          var isActive = link.dataset.target === activeId;
+          link.classList.toggle('active', isActive);
+          if (isActive) {
+            var rect = link.getBoundingClientRect();
+            var box = toc.getBoundingClientRect();
+            if (rect.top < box.top) {
+              toc.scrollTop -= (box.top - rect.top) + 8;
+            } else if (rect.bottom > box.bottom) {
+              toc.scrollTop += (rect.bottom - box.bottom) + 8;
+            }
+          }
+        });
+      }
+
+      function onScroll() {
+        if (ticking) return;
+        ticking = true;
+        window.requestAnimationFrame(function () {
+          updateScroll();
+          ticking = false;
+        });
+      }
+
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', onScroll);
+
+      toTop.addEventListener('click', function () {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        closeNav();
+      });
+
+      printBtn.addEventListener('click', function () { window.print(); });
+
+      /* ---------- Carga del README ---------- */
+
+      function loadGuide() {
+        if (!window.marked) {
+          showError(new Error('No se pudo cargar marked desde el CDN'));
+          return;
+        }
+
+        fetch('README.md', { cache: 'no-cache' })
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.text();
+          })
+          .then(function (markdown) {
+            var html = marked.parse(markdown, { gfm: true, breaks: false });
+            var clean = window.DOMPurify
+              ? DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+              : html;
+            content.innerHTML = clean;
+            enhance();
+          })
+          .catch(showError);
+      }
+
+      loadGuide();
+    })();
+  </script>
+</body>
+</html>
