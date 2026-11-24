@@ -1156,13 +1156,3 @@ quedar:
   }
 }
 ```
-
-Ambos servidores se conectan al iniciar OpenCode. Usa `/mcps` para conectar o desconectar `rea` y
-`romdev` sin tocar el archivo.
-
-Reinicia OpenCode y prueba:
-
-```text
-Usa romdev para crear un ejemplo de Game Boy en ~/roms/demo, compilarlo con
-build({output:'run'}) y mostrarme el screenshot del primer frame.
-```
